@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import ctypes
+import time
 from ctypes import wintypes
 import platform
 import sys
@@ -113,6 +114,12 @@ class UEAssetFinderGUI:
         self._old_wndproc = None
         self._new_wndproc = None
         self._call_wndproc = None
+        self._drop_hover = False
+        self._folder_drop_hover = False
+        self._analysis_active = False
+        self._active_tab = "analyze"
+        self._tab_buttons = {}
+        self._panel_frames = []
 
         # 设置样式并创建界面
         self.setup_styles()
@@ -139,8 +146,13 @@ class UEAssetFinderGUI:
             "success": "#2cff8a",
             "warning": "#f4ff70",
             "error": "#ff4f6d",
+            "selection_bg": "#9dffb8",
+            "selection_fg": "#001f0b",
         }
         self.root.configure(bg=self.colors["bg"])
+        self.root.option_add("*selectBackground", self.colors["selection_bg"])
+        self.root.option_add("*selectForeground", self.colors["selection_fg"])
+        self.root.option_add("*inactiveselectBackground", self.colors["accent_dim"])
 
         available = set(tkfont.families(self.root))
 
@@ -168,7 +180,8 @@ class UEAssetFinderGUI:
                 self.app_icon = tk.PhotoImage(file=str(icon_path))
             else:
                 self.app_icon = self._build_app_icon(64)
-            self.header_icon = self.app_icon.subsample(2, 2)
+            header_scale = max(1, math.ceil(max(self.app_icon.width(), self.app_icon.height()) / 48))
+            self.header_icon = self.app_icon.subsample(header_scale, header_scale)
             self.root.iconphoto(True, self.app_icon)
         except Exception:
             self.app_icon = None
@@ -268,8 +281,8 @@ class UEAssetFinderGUI:
         )
         style.map(
             "Treeview",
-            background=[("selected", self.colors["accent_dim"])],
-            foreground=[("selected", self.colors["terminal"])],
+            background=[("selected", self.colors["selection_bg"])],
+            foreground=[("selected", self.colors["selection_fg"])],
         )
         style.configure(
             "Treeview.Heading",
@@ -290,6 +303,17 @@ class UEAssetFinderGUI:
             bordercolor=self.colors["panel_line"],
             lightcolor=self.colors["panel_line"],
             darkcolor=self.colors["panel_line"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
+            disabledbackground=self.colors["terminal"],
+            disabledforeground=self.colors["text_muted"],
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", self.colors["terminal"]), ("disabled", self.colors["panel"])],
+            foreground=[("readonly", self.colors["text"]), ("disabled", self.colors["text_muted"])],
+            selectbackground=[("readonly", self.colors["selection_bg"])],
+            selectforeground=[("readonly", self.colors["selection_fg"])],
         )
 
         style.configure(
@@ -338,7 +362,7 @@ class UEAssetFinderGUI:
         main_frame = ttk.Frame(self.root, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(2, weight=1)
+        main_frame.rowconfigure(3, weight=1)
 
         header = tk.Frame(
             main_frame,
@@ -367,23 +391,45 @@ class UEAssetFinderGUI:
         self.matrix_strip.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self._matrix_items = []
 
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.grid(row=2, column=0, sticky="nsew")
-        self.notebook.columnconfigure(0, weight=1)
-        self.notebook.rowconfigure(0, weight=1)
+        self.tab_bar = tk.Frame(main_frame, bg=self.colors["bg"])
+        self.tab_bar.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        self.tab_bar.columnconfigure(2, weight=1)
 
-        self.tab_analyze = ttk.Frame(self.notebook)
-        self.tab_relocate = ttk.Frame(self.notebook)
+        self._create_tab_button("analyze", "ASSET ANALYZE", "资产分析", 0)
+        self._create_tab_button("relocate", "PATH REPAIR", "目录修复", 1)
 
-        self.notebook.add(self.tab_analyze, text="资产分析")
-        self.notebook.add(self.tab_relocate, text="目录修复")
+        self.content_frame = tk.Frame(
+            main_frame,
+            bg=self.colors["bg"],
+            highlightbackground=self.colors["panel_line"],
+            highlightthickness=1,
+        )
+        self.content_frame.grid(row=3, column=0, sticky="nsew")
+        self.content_frame.columnconfigure(0, weight=1)
+        self.content_frame.rowconfigure(0, weight=1)
+
+        self.tab_analyze = tk.Frame(self.content_frame, bg=self.colors["bg"])
+        self.tab_relocate = tk.Frame(self.content_frame, bg=self.colors["bg"])
+        for tab in (self.tab_analyze, self.tab_relocate):
+            tab.grid(row=0, column=0, sticky="nsew")
+
+        self.analysis_flow = tk.Canvas(
+            self.content_frame,
+            bg=self.colors["terminal"],
+            highlightthickness=1,
+            highlightbackground=self.colors["accent_dim"],
+            bd=0,
+        )
+        self._analysis_flow_items = []
+        self._analysis_flow_step = 0
 
         self._build_analyze_tab(self.tab_analyze)
         self._build_relocate_tab(self.tab_relocate)
+        self._select_tab("analyze")
 
         self.status_var = tk.StringVar(value="就绪")
         self.status_frame = tk.Frame(main_frame, bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"], highlightthickness=1)
-        self.status_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.status_frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         self.status_frame.columnconfigure(0, weight=1)
 
         self.status_label = tk.Label(
@@ -395,6 +441,100 @@ class UEAssetFinderGUI:
             anchor="w",
         )
         self.status_label.pack(fill=tk.X, padx=10, pady=5)
+
+    def _create_tab_button(self, key: str, label: str, sublabel: str, column: int):
+        canvas = tk.Canvas(
+            self.tab_bar,
+            width=180,
+            height=46,
+            bg=self.colors["bg"],
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+        )
+        canvas.grid(row=0, column=column, sticky="w", padx=(0, 8))
+        canvas.bind("<Button-1>", lambda _event, tab=key: self._select_tab(tab))
+        canvas.bind("<Enter>", lambda _event, tab=key: self._draw_tab_button(tab, hover=True))
+        canvas.bind("<Leave>", lambda _event, tab=key: self._draw_tab_button(tab, hover=False))
+        self._tab_buttons[key] = {"canvas": canvas, "label": label, "sublabel": sublabel, "hover": False}
+        self._draw_tab_button(key)
+
+    def _draw_tab_button(self, key: str, hover: Optional[bool] = None):
+        tab = self._tab_buttons[key]
+        canvas: tk.Canvas = tab["canvas"]
+        if hover is not None:
+            tab["hover"] = hover
+
+        selected = key == self._active_tab
+        canvas.delete("all")
+
+        width = int(canvas["width"])
+        height = int(canvas["height"])
+        y0 = 2 if selected else 9
+        y1 = height - 2 if selected else height - 8
+        fill = self.colors["panel_high"] if selected else self.colors["terminal"]
+        outline = self.colors["accent_soft"] if selected else self.colors["panel_line"]
+        if tab["hover"] and not selected:
+            outline = self.colors["accent_dim"]
+            fill = self.colors["panel"]
+
+        points = [
+            1, y0 + 8,
+            10, y0,
+            width - 12, y0,
+            width - 1, y0 + 10,
+            width - 1, y1,
+            1, y1,
+        ]
+        canvas.create_polygon(points, fill=fill, outline=outline, width=2 if selected else 1)
+        canvas.create_line(12, y1 - 4, width - 12, y1 - 4, fill=self.colors["accent"] if selected else self.colors["terminal_line"])
+        if selected:
+            canvas.create_rectangle(12, y0 + 6, width - 12, y0 + 9, outline="", fill=self.colors["accent_dim"])
+            text_color = self.colors["accent_soft"]
+            sub_color = self.colors["text"]
+            font = self.fonts["mono_bold"]
+        else:
+            text_color = self.colors["text_muted"]
+            sub_color = self.colors["accent_dim"]
+            font = self.fonts["mono"]
+
+        canvas.create_text(16, y0 + 13, text=tab["label"], anchor="w", fill=text_color, font=font)
+        canvas.create_text(16, y0 + 29, text=tab["sublabel"], anchor="w", fill=sub_color, font=self.fonts["status"])
+
+    def _select_tab(self, key: str):
+        self._active_tab = key
+        if key == "analyze":
+            self.tab_analyze.tkraise()
+        else:
+            self.tab_relocate.tkraise()
+        for tab_key in self._tab_buttons:
+            self._draw_tab_button(tab_key)
+
+    def _make_action_button(self, parent, text: str, command, primary: bool = False, width: int = 10):
+        bg = self.colors["accent"] if primary else self.colors["panel_high"]
+        fg = self.colors["selection_fg"] if primary else self.colors["accent_soft"]
+        active_bg = self.colors["accent_soft"] if primary else self.colors["terminal_line"]
+        active_fg = self.colors["selection_fg"] if primary else self.colors["accent"]
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            width=width,
+            bg=bg,
+            fg=fg,
+            activebackground=active_bg,
+            activeforeground=active_fg,
+            disabledforeground=self.colors["text_muted"],
+            font=self.fonts["button"],
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            highlightthickness=1,
+            highlightbackground=self.colors["accent_dim"] if primary else self.colors["panel_line"],
+            highlightcolor=self.colors["accent_soft"],
+        )
 
     def _build_analyze_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -472,15 +612,15 @@ class UEAssetFinderGUI:
             highlightthickness=1,
             highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
-            selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["terminal"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
+            disabledbackground=self.colors["terminal"],
+            disabledforeground=self.colors["text_muted"],
         )
         entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
-        ttk.Button(file_inner, text="浏览文件", style="Ghost.TButton", command=self.browse_asset, width=10).grid(
-            row=0, column=2, padx=(0, 6)
-        )
-        ttk.Button(file_inner, text="开始分析", style="Primary.TButton", command=self.analyze_asset, width=10).grid(row=0, column=3)
+        self._make_action_button(file_inner, "浏览文件", self.browse_asset, width=10).grid(row=0, column=2, padx=(0, 6))
+        self._make_action_button(file_inner, "开始分析", self.analyze_asset, primary=True, width=10).grid(row=0, column=3)
 
         self.progress = ttk.Progressbar(parent, mode="indeterminate", style="Accent.Horizontal.TProgressbar")
         self.progress.grid(row=2, column=0, sticky="ew", pady=(0, 6))
@@ -506,8 +646,8 @@ class UEAssetFinderGUI:
             highlightthickness=1,
             highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
-            selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["terminal"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
             padx=10,
             pady=8,
         )
@@ -591,15 +731,15 @@ class UEAssetFinderGUI:
             highlightthickness=1,
             highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
-            selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["terminal"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
+            disabledbackground=self.colors["terminal"],
+            disabledforeground=self.colors["text_muted"],
         )
         entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
-        ttk.Button(folder_inner, text="浏览文件夹", style="Ghost.TButton", command=self.browse_folder, width=10).grid(
-            row=0, column=2, padx=(0, 6)
-        )
-        ttk.Button(folder_inner, text="检测路径", style="Primary.TButton", command=self.validate_folder, width=10).grid(row=0, column=3)
+        self._make_action_button(folder_inner, "浏览文件夹", self.browse_folder, width=10).grid(row=0, column=2, padx=(0, 6))
+        self._make_action_button(folder_inner, "检测路径", self.validate_folder, primary=True, width=10).grid(row=0, column=3)
 
         self.folder_hint_var = tk.StringVar(value="等待检测")
         self.folder_hint_label = tk.Label(
@@ -669,16 +809,16 @@ class UEAssetFinderGUI:
             highlightthickness=1,
             highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
-            selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["terminal"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
         )
         self.relocate_name_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
-        self.relocate_execute_btn = ttk.Button(
+        self.relocate_execute_btn = self._make_action_button(
             rename_inner,
-            text="执行变更",
-            style="Primary.TButton",
-            command=self.execute_relocate,
+            "执行变更",
+            self.execute_relocate,
+            primary=True,
             width=10,
         )
         self.relocate_execute_btn.grid(row=0, column=2, padx=(0, 6))
@@ -690,8 +830,10 @@ class UEAssetFinderGUI:
             values=["副本粘贴模式", "原位更改模式"],
             state="readonly",
             width=16,
+            takefocus=True,
         )
         self.relocate_mode_combo.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+        self.relocate_mode_combo.bind("<Button-1>", lambda _event: self.relocate_mode_combo.focus_set())
 
         self.relocate_tip_label = tk.Label(
             rename_inner,
@@ -713,8 +855,9 @@ class UEAssetFinderGUI:
             section,
             bg=self.colors["panel"],
             highlightbackground=self.colors["panel_line"],
-            highlightthickness=1,
+            highlightthickness=2,
         )
+        self._panel_frames.append(card)
         card.pack(fill=tk.BOTH, expand=True)
         return section, card
 
@@ -776,7 +919,7 @@ class UEAssetFinderGUI:
 
         label = tk.Label(
             label_frame,
-            text=text,
+            text=f"[ {text} ]",
             bg=self.colors["bg"],
             fg=self.colors["accent"],
             font=self.fonts["body_bold"],
@@ -785,21 +928,25 @@ class UEAssetFinderGUI:
         return label_frame
 
     def _on_drop_enter(self, _event):
+        self._drop_hover = True
         self.drop_frame.configure(bg=self.colors["panel_high"], highlightbackground=self.colors["accent_soft"])
         self.drop_title.configure(bg=self.colors["panel_high"])
         self.drop_subtitle.configure(bg=self.colors["panel_high"])
 
     def _on_drop_leave(self, _event):
+        self._drop_hover = False
         self.drop_frame.configure(bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"])
         self.drop_title.configure(bg=self.colors["terminal"])
         self.drop_subtitle.configure(bg=self.colors["terminal"])
 
     def _on_folder_drop_enter(self, _event):
+        self._folder_drop_hover = True
         self.folder_drop_frame.configure(bg=self.colors["panel_high"], highlightbackground=self.colors["accent_soft"])
         self.folder_drop_title.configure(bg=self.colors["panel_high"])
         self.folder_drop_subtitle.configure(bg=self.colors["panel_high"])
 
     def _on_folder_drop_leave(self, _event):
+        self._folder_drop_hover = False
         self.folder_drop_frame.configure(bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"])
         self.folder_drop_title.configure(bg=self.colors["terminal"])
         self.folder_drop_subtitle.configure(bg=self.colors["terminal"])
@@ -814,16 +961,23 @@ class UEAssetFinderGUI:
         t = (math.sin(self._pulse_step) + 1.0) / 2.0
         border = self._blend_color(self.colors["panel_line"], self.colors["accent_soft"], t * 0.8)
         title_color = self._blend_color(self.colors["accent_dim"], self.colors["accent_soft"], t)
-        for frame, title in (
-            (getattr(self, "drop_frame", None), getattr(self, "drop_title", None)),
-            (getattr(self, "folder_drop_frame", None), getattr(self, "folder_drop_title", None)),
+        bg = self._blend_color(self.colors["terminal"], self.colors["panel_high"], t * 0.35)
+        for frame, title, subtitle, hovering in (
+            (getattr(self, "drop_frame", None), getattr(self, "drop_title", None), getattr(self, "drop_subtitle", None), self._drop_hover),
+            (getattr(self, "folder_drop_frame", None), getattr(self, "folder_drop_title", None), getattr(self, "folder_drop_subtitle", None), self._folder_drop_hover),
         ):
+            frame_bg = self.colors["panel_high"] if hovering else bg
+            frame_border = self.colors["accent_soft"] if hovering else border
             if frame:
-                frame.configure(highlightbackground=border)
+                frame.configure(bg=frame_bg, highlightbackground=frame_border)
             if title:
-                title.configure(fg=title_color)
+                title.configure(bg=frame_bg, fg=self.colors["accent_soft"] if hovering else title_color)
+            if subtitle:
+                subtitle.configure(bg=frame_bg)
         if getattr(self, "status_frame", None):
             self.status_frame.configure(highlightbackground=border)
+        for panel in getattr(self, "_panel_frames", []):
+            panel.configure(highlightbackground=self._blend_color(self.colors["panel_line"], self.colors["accent_dim"], t * 0.5))
         self._pulse_step += 0.08
         self.root.after(50, self._animate_drop_pulse)
 
@@ -874,6 +1028,65 @@ class UEAssetFinderGUI:
         strip.tag_lower("scan")
         self._matrix_step += 1
         self.root.after(90, self._animate_matrix_strip)
+
+    def _start_analysis_flow(self):
+        self._analysis_active = True
+        self._analysis_flow_step = 0
+        self.analysis_flow.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.analysis_flow.tk.call("raise", self.analysis_flow._w)
+        self._animate_analysis_flow()
+
+    def _stop_analysis_flow(self):
+        self._analysis_active = False
+        self.analysis_flow.delete("all")
+        self.analysis_flow.place_forget()
+
+    def _animate_analysis_flow(self):
+        if not self._analysis_active:
+            return
+
+        canvas = self.analysis_flow
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+        glyphs = "01:/\\[]{}<>#$UEASSETFINDER"
+        col_width = 18
+        columns = max(width // col_width, 20)
+
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, width, height, outline="", fill=self.colors["terminal"])
+        scan_y = (self._analysis_flow_step * 18) % max(height, 1)
+        canvas.create_rectangle(0, scan_y, width, min(scan_y + 80, height), outline="", fill=self.colors["terminal_line"])
+        canvas.create_text(
+            22,
+            18,
+            text="ANALYZING PACKAGE STREAM...",
+            anchor="w",
+            fill=self.colors["accent_soft"],
+            font=self.fonts["mono_bold"],
+        )
+        for col in range(columns):
+            x = col * col_width + 8
+            offset = (self._analysis_flow_step * (col % 5 + 1) * 7 + col * 13) % max(height, 1)
+            for row in range(-2, max(height // 16, 1) + 2):
+                y = row * 16 + offset - 80
+                if y < 38 or y > height:
+                    continue
+                color = self.colors["accent_soft"] if row % 5 == 0 else self.colors["accent_dim"]
+                canvas.create_text(
+                    x,
+                    y,
+                    text=random.choice(glyphs),
+                    anchor="nw",
+                    fill=color,
+                    font=self.fonts["mono"],
+                )
+        self._analysis_flow_step += 1
+        self.root.after(45, self._animate_analysis_flow)
+
+    def _hold_analysis_animation(self, started_at: float, min_seconds: float = 0.5):
+        while time.perf_counter() - started_at < min_seconds:
+            self.root.update()
+            time.sleep(0.02)
 
     def _set_status(self, text: str, kind: str = "normal"):
         self.status_var.set(text)
@@ -979,24 +1192,24 @@ class UEAssetFinderGUI:
         path = files[0]
         if os.path.isdir(path):
             self.folder_path_var.set(path)
-            self.notebook.select(self.tab_relocate)
+            self._select_tab("relocate")
             self.validate_folder()
             return
         if os.path.isfile(path):
             ext = Path(path).suffix.lower()
             if ext in {".uasset", ".umap", ".uexp", ".ubulk"}:
                 self.asset_file_var.set(path)
-                self.notebook.select(self.tab_analyze)
+                self._select_tab("analyze")
                 self.analyze_asset()
             else:
                 self.asset_file_var.set(path)
-                self.notebook.select(self.tab_analyze)
+                self._select_tab("analyze")
                 self.analyze_asset()
 
     def _toggle_relocate_controls(self, enabled: bool):
         state = tk.NORMAL if enabled else tk.DISABLED
         self.relocate_name_entry.configure(state=state)
-        self.relocate_mode_combo.configure(state="readonly" if enabled else "disabled")
+        self.relocate_mode_combo.configure(state="readonly")
         self.relocate_execute_btn.configure(state="normal" if enabled else "disabled")
 
     def _set_folder_hint(self, text: str, kind: str = "normal"):
@@ -1322,10 +1535,14 @@ class UEAssetFinderGUI:
         self.result_text.delete("1.0", tk.END)
         self.result_text.configure(state=tk.DISABLED)
         self._set_busy(True, "正在分析...")
+        analysis_started = time.perf_counter()
+        self._start_analysis_flow()
         self.root.update_idletasks()
 
         try:
             info = self.parser.parse_file(file_path)
+            self._hold_analysis_animation(analysis_started)
+            self._stop_analysis_flow()
             if not info:
                 self._append_text("✗ 无法识别该文件为 UE 资产文件\n", "error")
                 self._append_text(f"文件: {file_path}\n", "label")
@@ -1385,10 +1602,14 @@ class UEAssetFinderGUI:
 
             self.result_text.see("1.0")
         except Exception as exc:
+            self._hold_analysis_animation(analysis_started)
+            self._stop_analysis_flow()
             error_msg = f"✗ 错误: {exc}\n\n详情:\n{repr(exc)}"
             self._append_text(error_msg, "error")
             self._set_status("分析失败", "error")
         finally:
+            if self._analysis_active:
+                self._stop_analysis_flow()
             self._set_busy(False)
 
     def center_window(self):
