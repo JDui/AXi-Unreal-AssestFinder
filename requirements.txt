@@ -1,7 +1,8 @@
-# 项目依赖
-
-# GUI和拖拽功能
+# Runtime drag-and-drop support
 tkinterdnd2>=0.3.0
 
-# 注: tkinter是Python标准库的一部分，无需单独安装
-# ue_parser 使用 struct 模块解析UE资产文件二进制格式
+# Windows helper modules used by legacy drag-and-drop helpers and build hidden imports
+pywin32>=306; platform_system == "Windows"
+
+# Build tool
+pyinstaller>=6.0

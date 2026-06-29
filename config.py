@@ -1,19 +1,17 @@
-"""
-配置文件
-"""
+"""Application defaults."""
 
-# UE项目路径（可以根据需要修改）
-DEFAULT_PROJECT_PATH = None  # 如果设置为None，则需要在运行时指定
+# Optional Unreal project root. Keep None to let users choose paths at runtime.
+DEFAULT_PROJECT_PATH = None
 
-# UI配置
-UI_THEME = 'light'
-WINDOW_TITLE = 'UE资产路径查找工具'
+# UI defaults
+UI_THEME = "matrix-dark"
+WINDOW_TITLE = "AXi Unreal Asset Finder"
 WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 700
+WINDOW_HEIGHT = 720
 
-# 默认搜索路径
+# Optional startup search paths
 DEFAULT_SEARCH_PATHS = []
 
-# 日志配置
-LOG_LEVEL = 'INFO'
-LOG_FILE = 'asset_finder.log'
+# Logging defaults
+LOG_LEVEL = "INFO"
+LOG_FILE = "asset_finder.log"

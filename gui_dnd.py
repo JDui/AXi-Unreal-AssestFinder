@@ -4,6 +4,7 @@ UE 资产分析工具 - 支持拖拽的 GUI 界面
 
 import math
 import os
+import random
 import re
 import shutil
 import stat
@@ -92,7 +93,7 @@ class UEAssetFinderGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("UE 资产分析工具")
+        self.root.title("AXi UE Asset Finder")
         self.root.geometry("1000x720")
         self.root.minsize(900, 620)
         self.root.resizable(True, True)
@@ -123,18 +124,21 @@ class UEAssetFinderGUI:
 
     def _init_theme(self):
         self.colors = {
-            "bg": "#eef1f6",
-            "panel": "#ffffff",
-            "panel_high": "#f7f9fc",
-            "panel_line": "#dfe6ef",
-            "text": "#1d2433",
-            "text_muted": "#6b7280",
-            "accent": "#2f6bff",
-            "accent_soft": "#7aa2ff",
-            "accent_dim": "#1f4bd1",
-            "success": "#1f9d55",
-            "warning": "#b7791f",
-            "error": "#e02424",
+            "bg": "#020403",
+            "panel": "#07100b",
+            "panel_high": "#0d1c13",
+            "panel_line": "#19492f",
+            "terminal": "#010503",
+            "terminal_line": "#123523",
+            "text": "#d7ffe5",
+            "text_muted": "#73d58f",
+            "accent": "#00ff66",
+            "accent_soft": "#75ffa5",
+            "accent_dim": "#00a84a",
+            "cyan": "#00d9ff",
+            "success": "#2cff8a",
+            "warning": "#f4ff70",
+            "error": "#ff4f6d",
         }
         self.root.configure(bg=self.colors["bg"])
 
@@ -147,14 +151,14 @@ class UEAssetFinderGUI:
             return ("Segoe UI", size, weight)
 
         self.fonts = {
-            "title": pick_font(["Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Semibold", "Microsoft YaHei"], 17, "bold"),
-            "subtitle": pick_font(["Bahnschrift", "Segoe UI", "Microsoft YaHei"], 10),
-            "body": pick_font(["Bahnschrift", "Segoe UI", "Microsoft YaHei"], 10),
-            "body_bold": pick_font(["Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Semibold", "Microsoft YaHei"], 11, "bold"),
+            "title": pick_font(["Cascadia Code SemiBold", "Cascadia Code", "Consolas", "Microsoft YaHei"], 18, "bold"),
+            "subtitle": pick_font(["Cascadia Code", "Consolas", "Microsoft YaHei"], 10),
+            "body": pick_font(["Microsoft YaHei", "Cascadia Code", "Segoe UI"], 10),
+            "body_bold": pick_font(["Microsoft YaHei UI", "Cascadia Code SemiBold", "Consolas"], 11, "bold"),
             "mono": pick_font(["Cascadia Code", "Consolas", "Courier New"], 10),
-            "mono_bold": pick_font(["Cascadia Code", "Consolas", "Courier New"], 10, "bold"),
-            "button": pick_font(["Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Semibold", "Microsoft YaHei"], 10, "bold"),
-            "status": pick_font(["Bahnschrift", "Segoe UI", "Microsoft YaHei"], 9),
+            "mono_bold": pick_font(["Cascadia Code SemiBold", "Cascadia Code", "Consolas"], 10, "bold"),
+            "button": pick_font(["Cascadia Code SemiBold", "Cascadia Code", "Consolas", "Microsoft YaHei"], 10, "bold"),
+            "status": pick_font(["Cascadia Code", "Consolas", "Microsoft YaHei"], 9),
         }
 
     def _apply_window_icon(self):
@@ -234,8 +238,8 @@ class UEAssetFinderGUI:
 
         style.configure("TFrame", background=self.colors["bg"])
         style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=self.fonts["body"])
-        style.configure("Title.TLabel", background=self.colors["bg"], foreground=self.colors["accent"], font=self.fonts["title"])
-        style.configure("Subtitle.TLabel", background=self.colors["bg"], foreground=self.colors["text_muted"], font=self.fonts["subtitle"])
+        style.configure("Title.TLabel", background=self.colors["panel_high"], foreground=self.colors["accent"], font=self.fonts["title"])
+        style.configure("Subtitle.TLabel", background=self.colors["panel_high"], foreground=self.colors["text_muted"], font=self.fonts["subtitle"])
         style.configure("TLabelFrame", background=self.colors["bg"], foreground=self.colors["accent"], borderwidth=1, relief=tk.FLAT)
         style.configure("TLabelFrame.Label", background=self.colors["bg"], foreground=self.colors["accent"], font=self.fonts["body_bold"])
         style.configure("TSeparator", background=self.colors["panel_line"])
@@ -244,14 +248,14 @@ class UEAssetFinderGUI:
             "TNotebook.Tab",
             background=self.colors["panel"],
             foreground=self.colors["text_muted"],
-            padding=(14, 6),
+            padding=(16, 7),
             font=self.fonts["body_bold"],
             borderwidth=0,
         )
         style.map(
             "TNotebook.Tab",
             background=[("selected", self.colors["panel_high"]), ("active", self.colors["panel_high"])],
-            foreground=[("selected", self.colors["accent_dim"]), ("active", self.colors["text"])],
+            foreground=[("selected", self.colors["accent"]), ("active", self.colors["accent_soft"])],
         )
         style.configure(
             "Treeview",
@@ -264,44 +268,65 @@ class UEAssetFinderGUI:
         )
         style.map(
             "Treeview",
-            background=[("selected", self.colors["accent_soft"])],
-            foreground=[("selected", self.colors["bg"])],
+            background=[("selected", self.colors["accent_dim"])],
+            foreground=[("selected", self.colors["terminal"])],
         )
         style.configure(
             "Treeview.Heading",
             background=self.colors["panel_high"],
-            foreground=self.colors["text"],
+            foreground=self.colors["accent_soft"],
             font=self.fonts["body_bold"],
             relief=tk.FLAT,
         )
         style.map("Treeview.Heading", background=[("active", self.colors["panel_high"])])
         style.configure("TRadiobutton", background=self.colors["panel"], foreground=self.colors["text"], font=self.fonts["body"])
-        style.map("TRadiobutton", foreground=[("active", self.colors["text"])])
+        style.map("TRadiobutton", foreground=[("active", self.colors["accent_soft"])])
         style.configure(
             "TCombobox",
-            fieldbackground=self.colors["panel"],
-            background=self.colors["panel"],
+            fieldbackground=self.colors["terminal"],
+            background=self.colors["panel_high"],
             foreground=self.colors["text"],
-            arrowcolor=self.colors["text_muted"],
+            arrowcolor=self.colors["accent"],
+            bordercolor=self.colors["panel_line"],
+            lightcolor=self.colors["panel_line"],
+            darkcolor=self.colors["panel_line"],
         )
 
-        style.configure("Primary.TButton", font=self.fonts["button"], background=self.colors["accent"], foreground="#ffffff", padding=(16, 6), borderwidth=0)
+        style.configure(
+            "Primary.TButton",
+            font=self.fonts["button"],
+            background=self.colors["accent"],
+            foreground=self.colors["terminal"],
+            padding=(16, 7),
+            borderwidth=0,
+            focusthickness=1,
+            focuscolor=self.colors["accent_soft"],
+        )
         style.map(
             "Primary.TButton",
             background=[("active", self.colors["accent_soft"]), ("pressed", self.colors["accent_dim"])],
-            foreground=[("active", "#ffffff")],
+            foreground=[("active", self.colors["terminal"])],
         )
 
-        style.configure("Ghost.TButton", font=self.fonts["button"], background=self.colors["panel"], foreground=self.colors["text"], padding=(14, 6), borderwidth=0)
+        style.configure(
+            "Ghost.TButton",
+            font=self.fonts["button"],
+            background=self.colors["panel_high"],
+            foreground=self.colors["accent_soft"],
+            padding=(14, 7),
+            borderwidth=0,
+            focusthickness=1,
+            focuscolor=self.colors["panel_line"],
+        )
         style.map(
             "Ghost.TButton",
-            background=[("active", self.colors["panel_high"]), ("pressed", self.colors["panel_line"])],
-            foreground=[("active", self.colors["text"])],
+            background=[("active", self.colors["terminal_line"]), ("pressed", self.colors["panel_line"])],
+            foreground=[("active", self.colors["accent"])],
         )
 
         style.configure(
             "Accent.Horizontal.TProgressbar",
-            troughcolor=self.colors["panel"],
+            troughcolor=self.colors["terminal"],
             background=self.colors["accent"],
             bordercolor=self.colors["panel_line"],
             lightcolor=self.colors["accent_soft"],
@@ -310,23 +335,37 @@ class UEAssetFinderGUI:
         )
 
     def create_ui(self):
-        main_frame = ttk.Frame(self.root, padding=10)
+        main_frame = ttk.Frame(self.root, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(2, weight=1)
 
-        header = tk.Frame(main_frame, bg=self.colors["bg"])
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        header = tk.Frame(
+            main_frame,
+            bg=self.colors["panel_high"],
+            highlightbackground=self.colors["panel_line"],
+            highlightthickness=1,
+        )
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8), ipady=6)
         header.columnconfigure(1, weight=1)
 
         if self.header_icon:
-            icon_label = tk.Label(header, image=self.header_icon, bg=self.colors["bg"])
+            icon_label = tk.Label(header, image=self.header_icon, bg=self.colors["panel_high"])
             icon_label.grid(row=0, column=0, rowspan=2, padx=(0, 12))
 
-        ttk.Label(header, text="UE 资产分析工具", style="Title.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(header, text="拖拽 UE 资源文件或文件夹进行分析与修复", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(header, text="UE 资产分析工具 // AXi PATHFINDER", style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header, text="MATRIX ROUTE SCANNER / 拖拽 UE 资源文件或文件夹进行分析与修复", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
 
-        ttk.Separator(main_frame, orient=tk.HORIZONTAL).grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.matrix_strip = tk.Canvas(
+            main_frame,
+            height=28,
+            bg=self.colors["terminal"],
+            highlightthickness=1,
+            highlightbackground=self.colors["panel_line"],
+            bd=0,
+        )
+        self.matrix_strip.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self._matrix_items = []
 
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.grid(row=2, column=0, sticky="nsew")
@@ -343,19 +382,19 @@ class UEAssetFinderGUI:
         self._build_relocate_tab(self.tab_relocate)
 
         self.status_var = tk.StringVar(value="就绪")
-        status_frame = tk.Frame(main_frame, bg=self.colors["panel"], highlightbackground=self.colors["panel_line"], highlightthickness=1)
-        status_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
-        status_frame.columnconfigure(0, weight=1)
+        self.status_frame = tk.Frame(main_frame, bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"], highlightthickness=1)
+        self.status_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.status_frame.columnconfigure(0, weight=1)
 
         self.status_label = tk.Label(
-            status_frame,
+            self.status_frame,
             textvariable=self.status_var,
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text_muted"],
             font=self.fonts["status"],
             anchor="w",
         )
-        self.status_label.pack(fill=tk.X, padx=8, pady=4)
+        self.status_label.pack(fill=tk.X, padx=10, pady=5)
 
     def _build_analyze_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -367,7 +406,7 @@ class UEAssetFinderGUI:
 
         self.drop_frame = tk.Frame(
             drop_container,
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             highlightbackground=self.colors["panel_line"],
             highlightthickness=1,
         )
@@ -377,8 +416,8 @@ class UEAssetFinderGUI:
         self.drop_title = tk.Label(
             self.drop_frame,
             text="将 UE 资产文件拖到此处",
-            bg=self.colors["panel"],
-            fg=self.colors["text"],
+            bg=self.colors["terminal"],
+            fg=self.colors["accent_soft"],
             font=self.fonts["body_bold"],
         )
         self.drop_title.pack(anchor="center", pady=(6, 2))
@@ -386,7 +425,7 @@ class UEAssetFinderGUI:
         self.drop_subtitle = tk.Label(
             self.drop_frame,
             text="支持 .uasset / .umap / .uexp / .ubulk",
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text_muted"],
             font=self.fonts["body"],
         )
@@ -425,16 +464,16 @@ class UEAssetFinderGUI:
             file_inner,
             textvariable=self.asset_file_var,
             font=self.fonts["mono"],
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text"],
             insertbackground=self.colors["accent"],
             relief=tk.FLAT,
             bd=1,
             highlightthickness=1,
-            highlightbackground=self.colors["panel_line"],
+            highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
             selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["bg"],
+            selectforeground=self.colors["terminal"],
         )
         entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
@@ -459,16 +498,16 @@ class UEAssetFinderGUI:
             height=20,
             font=self.fonts["mono"],
             wrap=tk.WORD,
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text"],
             insertbackground=self.colors["accent"],
             relief=tk.FLAT,
             bd=0,
             highlightthickness=1,
-            highlightbackground=self.colors["panel_line"],
+            highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
             selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["bg"],
+            selectforeground=self.colors["terminal"],
             padx=10,
             pady=8,
         )
@@ -486,7 +525,7 @@ class UEAssetFinderGUI:
 
         self.folder_drop_frame = tk.Frame(
             drop_container,
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             highlightbackground=self.colors["panel_line"],
             highlightthickness=1,
         )
@@ -496,8 +535,8 @@ class UEAssetFinderGUI:
         self.folder_drop_title = tk.Label(
             self.folder_drop_frame,
             text="将 UE 资产文件夹拖到此处",
-            bg=self.colors["panel"],
-            fg=self.colors["text"],
+            bg=self.colors["terminal"],
+            fg=self.colors["accent_soft"],
             font=self.fonts["body_bold"],
         )
         self.folder_drop_title.pack(anchor="center", pady=(6, 2))
@@ -505,7 +544,7 @@ class UEAssetFinderGUI:
         self.folder_drop_subtitle = tk.Label(
             self.folder_drop_frame,
             text="用于校验相对路径并一键变更目录名",
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text_muted"],
             font=self.fonts["body"],
         )
@@ -544,16 +583,16 @@ class UEAssetFinderGUI:
             folder_inner,
             textvariable=self.folder_path_var,
             font=self.fonts["mono"],
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text"],
             insertbackground=self.colors["accent"],
             relief=tk.FLAT,
             bd=1,
             highlightthickness=1,
-            highlightbackground=self.colors["panel_line"],
+            highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
             selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["bg"],
+            selectforeground=self.colors["terminal"],
         )
         entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
@@ -622,16 +661,16 @@ class UEAssetFinderGUI:
             rename_inner,
             textvariable=self.relocate_name_var,
             font=self.fonts["mono"],
-            bg=self.colors["panel"],
+            bg=self.colors["terminal"],
             fg=self.colors["text"],
             insertbackground=self.colors["accent"],
             relief=tk.FLAT,
             bd=1,
             highlightthickness=1,
-            highlightbackground=self.colors["panel_line"],
+            highlightbackground=self.colors["terminal_line"],
             highlightcolor=self.colors["accent"],
             selectbackground=self.colors["accent_soft"],
-            selectforeground=self.colors["bg"],
+            selectforeground=self.colors["terminal"],
         )
         self.relocate_name_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
@@ -751,9 +790,9 @@ class UEAssetFinderGUI:
         self.drop_subtitle.configure(bg=self.colors["panel_high"])
 
     def _on_drop_leave(self, _event):
-        self.drop_frame.configure(bg=self.colors["panel"], highlightbackground=self.colors["panel_line"])
-        self.drop_title.configure(bg=self.colors["panel"])
-        self.drop_subtitle.configure(bg=self.colors["panel"])
+        self.drop_frame.configure(bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"])
+        self.drop_title.configure(bg=self.colors["terminal"])
+        self.drop_subtitle.configure(bg=self.colors["terminal"])
 
     def _on_folder_drop_enter(self, _event):
         self.folder_drop_frame.configure(bg=self.colors["panel_high"], highlightbackground=self.colors["accent_soft"])
@@ -761,17 +800,20 @@ class UEAssetFinderGUI:
         self.folder_drop_subtitle.configure(bg=self.colors["panel_high"])
 
     def _on_folder_drop_leave(self, _event):
-        self.folder_drop_frame.configure(bg=self.colors["panel"], highlightbackground=self.colors["panel_line"])
-        self.folder_drop_title.configure(bg=self.colors["panel"])
-        self.folder_drop_subtitle.configure(bg=self.colors["panel"])
+        self.folder_drop_frame.configure(bg=self.colors["terminal"], highlightbackground=self.colors["panel_line"])
+        self.folder_drop_title.configure(bg=self.colors["terminal"])
+        self.folder_drop_subtitle.configure(bg=self.colors["terminal"])
 
     def _start_drop_pulse(self):
         self._pulse_step = 0.0
+        self._matrix_step = 0
         self._animate_drop_pulse()
+        self._animate_matrix_strip()
 
     def _animate_drop_pulse(self):
         t = (math.sin(self._pulse_step) + 1.0) / 2.0
         border = self._blend_color(self.colors["panel_line"], self.colors["accent_soft"], t * 0.8)
+        title_color = self._blend_color(self.colors["accent_dim"], self.colors["accent_soft"], t)
         for frame, title in (
             (getattr(self, "drop_frame", None), getattr(self, "drop_title", None)),
             (getattr(self, "folder_drop_frame", None), getattr(self, "folder_drop_title", None)),
@@ -779,9 +821,59 @@ class UEAssetFinderGUI:
             if frame:
                 frame.configure(highlightbackground=border)
             if title:
-                title.configure(fg=self.colors["text"])
+                title.configure(fg=title_color)
+        if getattr(self, "status_frame", None):
+            self.status_frame.configure(highlightbackground=border)
         self._pulse_step += 0.08
         self.root.after(50, self._animate_drop_pulse)
+
+    def _animate_matrix_strip(self):
+        strip = getattr(self, "matrix_strip", None)
+        if not strip:
+            return
+
+        width = max(strip.winfo_width(), 1)
+        height = max(strip.winfo_height(), 28)
+        columns = max(width // 18, 24)
+        glyphs = "01<>[]{}#$:/\\"
+
+        if len(self._matrix_items) != columns:
+            strip.delete("all")
+            self._matrix_items = []
+            for i in range(columns):
+                x = 8 + i * 18
+                y = 7 + (i % 3) * 7
+                item = strip.create_text(
+                    x,
+                    y,
+                    text=random.choice(glyphs),
+                    anchor="nw",
+                    fill=self.colors["accent_dim"],
+                    font=self.fonts["mono"],
+                )
+                self._matrix_items.append(item)
+            strip.create_line(0, height - 2, width, height - 2, fill=self.colors["accent_dim"])
+
+        for i, item in enumerate(self._matrix_items):
+            if (i + self._matrix_step) % 3 == 0:
+                strip.itemconfigure(item, text=random.choice(glyphs), fill=self.colors["accent_soft"])
+            else:
+                strip.itemconfigure(item, text=random.choice(glyphs), fill=self.colors["accent_dim"])
+
+        scan_x = (self._matrix_step * 14) % max(width, 1)
+        strip.delete("scan")
+        strip.create_rectangle(
+            scan_x,
+            1,
+            min(scan_x + 70, width),
+            height - 3,
+            outline="",
+            fill=self.colors["terminal_line"],
+            tags="scan",
+        )
+        strip.tag_lower("scan")
+        self._matrix_step += 1
+        self.root.after(90, self._animate_matrix_strip)
 
     def _set_status(self, text: str, kind: str = "normal"):
         self.status_var.set(text)
