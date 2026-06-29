@@ -52,6 +52,11 @@ python -m compileall main.py gui_dnd.py ue_parser.py asset_finder.py config.py
 - 拖拽区可接收文件。
 - `test_asset.uasset` 可被解析。
 - 目录修复按钮默认禁用，校验通过后才启用。
+- 目录修复模式药丸滑块可在副本粘贴和原位更改之间切换。
+- 目录修复拖入文件夹和检测路径时会显示代码流扫过动画。
+- 检测结果双击异常行可定位到实际文件。
+- 分析结果选中文本使用亮绿底和深色字反转显示。
+- 引用文件按目录层级输出脑图风格结构。
 - 新旧目录名长度不一致时会弹出二次确认。
 - 切换到“原位更改模式”时会提示不可逆风险。
 - 执行目录变更前会提示目录外引用丢失风险。
@@ -82,7 +87,7 @@ dist\UEAssetPathFinder\
 发行压缩包建议命名：
 
 ```text
-release\UEAssetPathFinder-v1.2.0-win64.zip
+release\UEAssetPathFinder-v1.2.1-win64.zip
 ```
 
 ## 发布
@@ -93,7 +98,7 @@ release\UEAssetPathFinder-v1.2.0-win64.zip
 4. 压缩 `dist\UEAssetPathFinder` 到 `release\UEAssetPathFinder-vX.Y.Z-win64.zip`。
 5. 提交源码变更。
 6. 推送 `main`。
-7. 创建 Git tag，例如 `v1.2.0`。
+7. 创建 Git tag，例如 `v1.2.1`。
 8. 在 GitHub Release 上传压缩包。
 
 ## Git

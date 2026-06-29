@@ -18,7 +18,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, ttk
 from tkinter import font as tkfont
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 from asset_finder import UEAssetFinder
 from ue_parser import UEAssetParser, UEPathExtractor
@@ -123,6 +123,9 @@ class UEAssetFinderGUI:
         self._panel_frames = []
         self._dialog_result = None
         self._relocate_last_mode = "副本粘贴模式"
+        self._relocate_mode_options = ("副本粘贴模式", "原位更改模式")
+        self._relocate_item_paths: Dict[str, str] = {}
+        self._analysis_flow_label = "ANALYZING PACKAGE STREAM..."
         self._drag_start_x = 0
         self._drag_start_y = 0
         self._resize_start_x = 0
@@ -163,7 +166,7 @@ class UEAssetFinderGUI:
         self.root.configure(bg=self.colors["bg"])
         self.root.option_add("*selectBackground", self.colors["selection_bg"])
         self.root.option_add("*selectForeground", self.colors["selection_fg"])
-        self.root.option_add("*inactiveselectBackground", self.colors["accent_dim"])
+        self.root.option_add("*inactiveselectBackground", self.colors["selection_bg"])
         self.root.option_add("*TCombobox*Listbox.background", self.colors["terminal"])
         self.root.option_add("*TCombobox*Listbox.foreground", self.colors["text"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", self.colors["selection_bg"])
@@ -804,6 +807,82 @@ class UEAssetFinderGUI:
             highlightcolor=self.colors["accent_soft"],
         )
 
+    def _draw_round_rect(self, canvas: tk.Canvas, x0: int, y0: int, x1: int, y1: int, radius: int, **kwargs):
+        radius = max(1, min(radius, (x1 - x0) // 2, (y1 - y0) // 2))
+        canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1, **kwargs)
+        canvas.create_rectangle(x0, y0 + radius, x1, y1 - radius, **kwargs)
+        canvas.create_oval(x0, y0, x0 + radius * 2, y0 + radius * 2, **kwargs)
+        canvas.create_oval(x1 - radius * 2, y0, x1, y0 + radius * 2, **kwargs)
+        canvas.create_oval(x0, y1 - radius * 2, x0 + radius * 2, y1, **kwargs)
+        canvas.create_oval(x1 - radius * 2, y1 - radius * 2, x1, y1, **kwargs)
+
+    def _draw_relocate_mode_switch(self):
+        canvas = getattr(self, "relocate_mode_switch", None)
+        if not canvas:
+            return
+
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), int(canvas["width"]))
+        height = max(canvas.winfo_height(), int(canvas["height"]))
+        pad = 2
+        selected = self.relocate_mode_var.get()
+        left_selected = selected == self._relocate_mode_options[0]
+        half = (width - pad * 2) // 2
+
+        self._draw_round_rect(
+            canvas,
+            pad,
+            pad,
+            width - pad,
+            height - pad,
+            16,
+            fill=self.colors["terminal"],
+            outline=self.colors["panel_line"],
+            width=1,
+        )
+
+        knob_x0 = pad + (0 if left_selected else half)
+        knob_x1 = pad + half if left_selected else width - pad
+        self._draw_round_rect(
+            canvas,
+            knob_x0,
+            pad,
+            knob_x1,
+            height - pad,
+            14,
+            fill=self.colors["accent"],
+            outline=self.colors["accent_soft"],
+            width=1,
+        )
+
+        canvas.create_line(width // 2, 7, width // 2, height - 7, fill=self.colors["terminal_line"])
+        for idx, label in enumerate(self._relocate_mode_options):
+            active = label == selected
+            x = width * (0.25 if idx == 0 else 0.75)
+            canvas.create_text(
+                x,
+                height // 2,
+                text=label,
+                fill=self.colors["selection_fg"] if active else self.colors["text_muted"],
+                font=self.fonts["button"] if active else self.fonts["status"],
+            )
+
+    def _set_relocate_mode(self, mode: str, notify: bool = True):
+        if mode not in self._relocate_mode_options:
+            return
+        previous = self.relocate_mode_var.get()
+        self.relocate_mode_var.set(mode)
+        self._draw_relocate_mode_switch()
+        if mode == "原位更改模式" and previous != mode and notify:
+            self._show_warning("原位更改模式", "该操作可能不可逆，注意备份！")
+        self._relocate_last_mode = mode
+
+    def _on_relocate_mode_switch_click(self, event):
+        canvas = event.widget
+        width = max(canvas.winfo_width(), int(canvas["width"]))
+        mode = self._relocate_mode_options[0] if event.x < width / 2 else self._relocate_mode_options[1]
+        self._set_relocate_mode(mode)
+
     def _build_analyze_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(3, weight=1)
@@ -925,10 +1004,14 @@ class UEAssetFinderGUI:
             highlightthickness=0,
             selectbackground=self.colors["selection_bg"],
             selectforeground=self.colors["selection_fg"],
+            inactiveselectbackground=self.colors["selection_bg"],
             padx=10,
             pady=8,
         )
         self.result_text.grid(row=0, column=0, sticky="nsew")
+        self.result_text.bind("<ButtonRelease-1>", self._raise_result_selection)
+        self.result_text.bind("<KeyRelease>", self._raise_result_selection)
+        self.result_text.bind("<<Selection>>", self._raise_result_selection)
         self.result_scroll = ttk.Scrollbar(
             result_text_shell,
             orient="vertical",
@@ -1101,6 +1184,8 @@ class UEAssetFinderGUI:
             highlightcolor=self.colors["accent"],
             selectbackground=self.colors["selection_bg"],
             selectforeground=self.colors["selection_fg"],
+            disabledbackground=self.colors["terminal"],
+            disabledforeground=self.colors["text_muted"],
         )
         self.relocate_name_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8), pady=2)
 
@@ -1114,17 +1199,25 @@ class UEAssetFinderGUI:
         self.relocate_execute_btn.grid(row=0, column=2, padx=(0, 6))
 
         self.relocate_mode_var = tk.StringVar(value="副本粘贴模式")
-        self.relocate_mode_combo = ttk.Combobox(
+        tk.Label(
             rename_inner,
-            textvariable=self.relocate_mode_var,
-            values=["副本粘贴模式", "原位更改模式"],
-            state="readonly",
-            width=16,
-            takefocus=True,
+            text="变更模式",
+            bg=self.colors["panel"],
+            fg=self.colors["text_muted"],
+            font=self.fonts["body"],
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.relocate_mode_switch = tk.Canvas(
+            rename_inner,
+            width=260,
+            height=38,
+            bg=self.colors["panel"],
+            highlightthickness=0,
+            cursor="hand2",
         )
-        self.relocate_mode_combo.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
-        self.relocate_mode_combo.bind("<Button-1>", lambda _event: self.relocate_mode_combo.focus_set())
-        self.relocate_mode_combo.bind("<<ComboboxSelected>>", self._on_relocate_mode_selected)
+        self.relocate_mode_switch.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+        self.relocate_mode_switch.bind("<Button-1>", self._on_relocate_mode_switch_click)
+        self.relocate_mode_switch.bind("<Configure>", lambda _event: self._draw_relocate_mode_switch())
+        self._draw_relocate_mode_switch()
 
         self.relocate_tip_label = tk.Label(
             rename_inner,
@@ -1162,6 +1255,21 @@ class UEAssetFinderGUI:
         self.result_text.tag_configure("bullet", foreground=self.colors["accent_dim"])
         self.result_text.tag_configure("error", foreground=self.colors["error"], font=self.fonts["mono_bold"])
         self.result_text.tag_configure("success", foreground=self.colors["success"], font=self.fonts["mono_bold"])
+        self.result_text.tag_configure("ref_near", foreground=self.colors["accent_soft"], font=self.fonts["mono_bold"])
+        self.result_text.tag_configure("ref_mid", foreground=self.colors["accent"])
+        self.result_text.tag_configure("ref_far", foreground=self.colors["accent_dim"])
+        self.result_text.tag_configure("ref_faint", foreground=self.colors["text_muted"])
+        self.result_text.tag_configure(tk.SEL, background=self.colors["selection_bg"], foreground=self.colors["selection_fg"])
+        self._raise_result_selection()
+
+    def _raise_result_selection(self, _event=None):
+        if not getattr(self, "result_text", None):
+            return
+        try:
+            self.result_text.tag_configure(tk.SEL, background=self.colors["selection_bg"], foreground=self.colors["selection_fg"])
+            self.result_text.tag_raise(tk.SEL)
+        except tk.TclError:
+            pass
 
     def _append_text(self, text: str, tag: Optional[str] = None):
         self.result_text.configure(state=tk.NORMAL)
@@ -1169,6 +1277,7 @@ class UEAssetFinderGUI:
             self.result_text.insert(tk.END, text, tag)
         else:
             self.result_text.insert(tk.END, text)
+        self._raise_result_selection()
         self.result_text.configure(state=tk.DISABLED)
 
     def _map_ue_path(self, path: str) -> str:
@@ -1187,6 +1296,97 @@ class UEAssetFinderGUI:
         if not name:
             name = mapped
         return name, mapped
+
+    def _split_reference_path(self, path: str) -> List[str]:
+        normalized = (path or "").strip().replace("\\", "/")
+        for prefix in ("/Content/", "/Game/", "/Engine/", "/Script/"):
+            idx = normalized.find(prefix)
+            if idx >= 0:
+                normalized = normalized[idx:]
+                break
+        normalized = self._map_ue_path(normalized).strip("/")
+        return [part for part in normalized.split("/") if part]
+
+    def _reference_tag_for_parts(self, parts: List[str], asset_dir_parts: List[str]) -> str:
+        if not parts:
+            return "ref_faint"
+        common = 0
+        for left, right in zip(parts, asset_dir_parts):
+            if left.lower() != right.lower():
+                break
+            common += 1
+        if asset_dir_parts and common >= len(asset_dir_parts):
+            return "ref_near"
+        if common >= max(2, len(asset_dir_parts) // 2):
+            return "ref_mid"
+        if common > 0:
+            return "ref_far"
+        return "ref_faint"
+
+    def _build_reference_tree(self, references: List[tuple[str, str]]) -> Dict[str, Any]:
+        root: Dict[str, Any] = {"children": {}, "refs": []}
+        for name, path in sorted(references, key=lambda item: item[1].lower()):
+            parts = self._split_reference_path(path)
+            if not parts:
+                parts = [name or path]
+            node = root
+            for part in parts:
+                node = node["children"].setdefault(part, {"children": {}, "refs": []})
+            node["refs"].append({"name": name, "path": path})
+        return root
+
+    def _append_reference_mind_map(self, references: List[tuple[str, str]], asset_path: str):
+        if not references:
+            self._append_text("  (未发现引用)\n", "label")
+            return
+
+        asset_parts = self._split_reference_path(asset_path)
+        asset_dir_parts = asset_parts[:-1] if len(asset_parts) > 1 else asset_parts
+        if asset_dir_parts:
+            self._append_text("  当前资产目录: ", "label")
+            self._append_text(f"/{'/'.join(asset_dir_parts)}\n", "path")
+
+        tree = self._build_reference_tree(references)
+        children = sorted(tree["children"].items(), key=lambda item: item[0].lower())
+        for index, (label, node) in enumerate(children):
+            self._append_reference_node(label, node, "", index == len(children) - 1, [label], asset_dir_parts)
+
+    def _append_reference_node(
+        self,
+        label: str,
+        node: Dict[str, Any],
+        prefix: str,
+        is_last: bool,
+        parts: List[str],
+        asset_dir_parts: List[str],
+    ):
+        connector = "└─ " if is_last else "├─ "
+        child_prefix = prefix + ("   " if is_last else "│  ")
+        tag = self._reference_tag_for_parts(parts, asset_dir_parts)
+        refs = node.get("refs", [])
+        children = sorted(node.get("children", {}).items(), key=lambda item: item[0].lower())
+
+        self._append_text(f"  {prefix}{connector}", "bullet")
+        self._append_text(label, tag)
+        if refs:
+            self._append_text("  ", None)
+            self._append_text(refs[0]["path"], "path")
+        self._append_text("\n", None)
+
+        for extra in refs[1:]:
+            self._append_text(f"  {child_prefix}• ", "bullet")
+            self._append_text(extra["path"], "path")
+            self._append_text("\n", None)
+
+        for index, (child_label, child_node) in enumerate(children):
+            self._append_reference_node(
+                child_label,
+                child_node,
+                child_prefix,
+                index == len(children) - 1,
+                parts + [child_label],
+                asset_dir_parts,
+            )
 
     def _make_section_label(self, parent, text: str, icon_kind: str = "file") -> tk.Frame:
         label_frame = tk.Frame(parent, bg=self.colors["bg"])
@@ -1320,9 +1520,10 @@ class UEAssetFinderGUI:
         self._matrix_step += 1
         self.root.after(90, self._animate_matrix_strip)
 
-    def _start_analysis_flow(self):
+    def _start_analysis_flow(self, label: str = "ANALYZING PACKAGE STREAM..."):
         self._analysis_active = True
         self._analysis_flow_step = 0
+        self._analysis_flow_label = label
         self.analysis_flow.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.analysis_flow.tk.call("raise", self.analysis_flow._w)
         self._animate_analysis_flow()
@@ -1350,7 +1551,7 @@ class UEAssetFinderGUI:
         canvas.create_text(
             22,
             18,
-            text="ANALYZING PACKAGE STREAM...",
+            text=self._analysis_flow_label,
             anchor="w",
             fill=self.colors["accent_soft"],
             font=self.fonts["mono_bold"],
@@ -1500,14 +1701,23 @@ class UEAssetFinderGUI:
     def _toggle_relocate_controls(self, enabled: bool):
         state = tk.NORMAL if enabled else tk.DISABLED
         self.relocate_name_entry.configure(state=state)
-        self.relocate_mode_combo.configure(state="readonly")
-        self.relocate_execute_btn.configure(state="normal" if enabled else "disabled")
-
-    def _on_relocate_mode_selected(self, _event=None):
-        mode = self.relocate_mode_var.get()
-        if mode == "原位更改模式" and self._relocate_last_mode != mode:
-            self._show_warning("原位更改模式", "该操作可能不可逆，注意备份！")
-        self._relocate_last_mode = mode
+        if enabled:
+            self.relocate_execute_btn.configure(
+                state="normal",
+                bg=self.colors["accent"],
+                fg=self.colors["selection_fg"],
+                activebackground=self.colors["accent_soft"],
+                activeforeground=self.colors["selection_fg"],
+            )
+        else:
+            self.relocate_execute_btn.configure(
+                state="disabled",
+                bg=self.colors["panel_high"],
+                fg=self.colors["text_muted"],
+                activebackground=self.colors["panel_high"],
+                activeforeground=self.colors["text_muted"],
+            )
+        self._draw_relocate_mode_switch()
 
     def _set_folder_hint(self, text: str, kind: str = "normal"):
         self.folder_hint_var.set(text)
@@ -1643,63 +1853,74 @@ class UEAssetFinderGUI:
             self._show_warning("提示", "文件夹不存在: " + folder_path)
             return
 
-        self.relocate_tree.delete(*self.relocate_tree.get_children())
-        self.relocate_ready = False
-        self._toggle_relocate_controls(False)
-        self._set_folder_hint("正在检测...", "normal")
-        self._set_status("正在检测目录...", "normal")
+        validation_started = time.perf_counter()
+        self._start_analysis_flow("SCANNING DIRECTORY ROUTES...")
+        self.root.update_idletasks()
 
-        asset_files = self._collect_asset_files(folder_path)
-        if not asset_files:
-            self._set_folder_hint("未发现 UE 资产文件", "warning")
-            self._set_status("未发现资产", "warning")
-            return
+        try:
+            self.relocate_tree.delete(*self.relocate_tree.get_children())
+            self._relocate_item_paths.clear()
+            self.relocate_ready = False
+            self._toggle_relocate_controls(False)
+            self._set_folder_hint("正在检测...", "normal")
+            self._set_status("正在检测目录...", "normal")
 
-        rel_parts, expected_prefix = self._get_expected_prefix(folder_path)
-        self.relocate_rel_parts = rel_parts
-        self.relocate_folder_path = folder_path
-        self.relocate_old_prefix = expected_prefix
-        self.relocate_files = asset_files
+            asset_files = self._collect_asset_files(folder_path)
+            if not asset_files:
+                self._set_folder_hint("未发现 UE 资产文件", "warning")
+                self._set_status("未发现资产", "warning")
+                return
 
-        errors = 0
-        for file_path in asset_files:
-            ue_path = UEPathExtractor.extract_asset_path(file_path)
-            fallback_path = None
-            if not ue_path or not ue_path.startswith(expected_prefix):
-                fallback_path = self._scan_game_paths(file_path, expected_prefix)
-                if fallback_path and fallback_path.startswith(expected_prefix):
-                    continue
-                if not ue_path:
-                    issue = "未识别 UE 路径"
-                elif not ue_path.startswith("/Game/"):
-                    issue = "非 /Game 路径"
+            rel_parts, expected_prefix = self._get_expected_prefix(folder_path)
+            self.relocate_rel_parts = rel_parts
+            self.relocate_folder_path = folder_path
+            self.relocate_old_prefix = expected_prefix
+            self.relocate_files = asset_files
+
+            errors = 0
+            for file_path in asset_files:
+                ue_path = UEPathExtractor.extract_asset_path(file_path)
+                fallback_path = None
+                if not ue_path or not ue_path.startswith(expected_prefix):
+                    fallback_path = self._scan_game_paths(file_path, expected_prefix)
+                    if fallback_path and fallback_path.startswith(expected_prefix):
+                        continue
+                    if not ue_path:
+                        issue = "未识别 UE 路径"
+                    elif not ue_path.startswith("/Game/"):
+                        issue = "非 /Game 路径"
+                    else:
+                        issue = "路径不在所选目录"
                 else:
-                    issue = "路径不在所选目录"
+                    continue
+
+                errors += 1
+                display_base = ue_path or fallback_path
+                display_ue = self._map_ue_path(display_base) if display_base else "(未找到)"
+                rel_display = os.path.relpath(file_path, folder_path)
+                item_id = f"relocate_{errors}"
+                self._relocate_item_paths[item_id] = file_path
+                self.relocate_tree.insert(
+                    "",
+                    "end",
+                    iid=item_id,
+                    values=(rel_display, display_ue, issue),
+                    tags=("error",),
+                )
+
+            if errors == 0:
+                old_name = rel_parts[-1]
+                self.relocate_name_var.set(old_name)
+                self.relocate_ready = True
+                self._toggle_relocate_controls(True)
+                self._set_folder_hint(f"目录变更就位：{len(asset_files)} 个资产路径一致", "success")
+                self._set_status("目录校验通过", "success")
             else:
-                continue
-
-            errors += 1
-            display_base = ue_path or fallback_path
-            display_ue = self._map_ue_path(display_base) if display_base else "(未找到)"
-            rel_display = os.path.relpath(file_path, folder_path)
-            self.relocate_tree.insert(
-                "",
-                "end",
-                iid=file_path,
-                values=(rel_display, display_ue, issue),
-                tags=("error",),
-            )
-
-        if errors == 0:
-            old_name = rel_parts[-1]
-            self.relocate_name_var.set(old_name)
-            self.relocate_ready = True
-            self._toggle_relocate_controls(True)
-            self._set_folder_hint(f"目录变更就位：{len(asset_files)} 个资产路径一致", "success")
-            self._set_status("目录校验通过", "success")
-        else:
-            self._set_folder_hint(f"发现 {errors} 个路径异常文件（双击可定位）", "error")
-            self._set_status("目录校验失败", "warning")
+                self._set_folder_hint(f"发现 {errors} 个路径异常文件（双击可定位）", "error")
+                self._set_status("目录校验失败", "warning")
+        finally:
+            self._hold_analysis_animation(validation_started)
+            self._stop_analysis_flow()
 
     def _build_new_prefix(self, new_name: str) -> str:
         if len(self.relocate_rel_parts) > 1:
@@ -1805,17 +2026,26 @@ class UEAssetFinderGUI:
         self._set_folder_hint(f"变更完成：修改 {modified_files} 个文件，共 {total_hits} 处", "success")
         self._set_status("目录变更完成", "success")
 
-    def _on_relocate_item_double_click(self, _event):
-        item = self.relocate_tree.focus()
+    def _on_relocate_item_double_click(self, event):
+        item = self.relocate_tree.identify_row(event.y) if event else ""
+        if not item:
+            item = self.relocate_tree.focus()
         if not item:
             return
-        if os.path.exists(item):
-            self._reveal_in_explorer(item)
+        file_path = self._relocate_item_paths.get(item, item)
+        if os.path.exists(file_path):
+            self._reveal_in_explorer(file_path)
+        else:
+            self._set_folder_hint("定位失败：文件不存在", "warning")
 
     def _reveal_in_explorer(self, file_path: str):
         try:
             target = os.path.abspath(file_path).replace("/", "\\")
-            subprocess.run(["explorer", f'/select,"{target}"'], check=False)
+            if os.name == "nt":
+                params = f'/select,"{target}"'
+                ctypes.windll.shell32.ShellExecuteW(None, "open", "explorer.exe", params, None, 1)
+            else:
+                subprocess.run(["xdg-open", os.path.dirname(file_path)], check=False)
         except Exception:
             try:
                 os.startfile(os.path.dirname(file_path))
@@ -1891,13 +2121,7 @@ class UEAssetFinderGUI:
                     self._append_text("  (未找到关联文件)\n", "label")
 
                 self._append_text(f"\n引用文件（共 {len(references)} 项）\n", "section")
-                if references:
-                    for name, path in references:
-                        self._append_text("  - ", "bullet")
-                        self._append_text(f"{name}  ", "value")
-                        self._append_text(f"{path}\n", "path")
-                else:
-                    self._append_text("  (未发现引用)\n", "label")
+                self._append_reference_mind_map(references, display_path)
 
                 self._set_status("分析完成", "success")
 
