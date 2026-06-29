@@ -2,7 +2,7 @@
 
 面向 Unreal Engine 资产迁移、整理和排错的小工具。它可以直接分析 `.uasset` / `.umap` / `.uexp` / `.ubulk` 文件，提取 UE 内路径、版本信息、关联文件和导入引用，并提供目录重命名修复辅助。
 
-当前版本：`v1.1.0`
+当前版本：`v1.2.0`
 
 ## 功能
 
@@ -10,7 +10,7 @@
 - UE 路径提取：从二进制内容中提取 `/Game/...` 或 `/Engine/...` 路径。
 - 引用查看：解析可见导入/引用字符串，便于定位依赖。
 - 拖拽操作：支持拖入资产文件或资产文件夹。
-- 目录修复：校验目录内资产路径，支持同长度目录名变更和安全副本模式。
+- 目录修复：校验目录内资产路径，支持不同长度目录名变更、二次确认和安全副本模式。
 - CLI 模式：可从命令行快速转换单文件或目录路径。
 - Windows 打包：通过 PyInstaller 生成免安装发行包。
 
@@ -18,7 +18,7 @@
 
 ### 使用发行版
 
-1. 下载 GitHub Release 中的 `UEAssetPathFinder-v1.1.0-win64.zip`。
+1. 下载 GitHub Release 中的 `UEAssetPathFinder-v1.2.0-win64.zip`。
 2. 解压后运行 `UEAssetPathFinder.exe`。
 3. 拖入 UE 资产文件或文件夹。
 
@@ -43,13 +43,18 @@ python main.py "D:\Project\Content\Characters"
 
 ![AXi Unreal Asset Finder Matrix UI](assets/ui-preview-matrix.png)
 
-`v1.1.0` 使用深色矩阵风格 UI：
+截图为无弹窗静默主界面状态。
+
+`v1.2.0` 使用深色矩阵风格 UI：
 
 - 绿色终端配色
-- 顶部扫描条动画
+- 自绘标题栏和棱角化窗口边缘
+- 新版 AX Matrix 软件图标
+- 顶部扫描条和代码流扫过动画
 - 拖拽区域霓虹脉冲
 - 终端风结果面板
-- 暗色表格和状态条
+- 暗色表格、下拉选择、弹窗和状态条
+- 文本选区使用亮绿底和深色字反转显示
 
 功能入口、拖拽逻辑、路径解析和目录修复流程保持不变。
 
@@ -58,8 +63,9 @@ python main.py "D:\Project\Content\Characters"
 目录修复只在路径校验通过后启用。
 
 - 默认使用“副本粘贴模式”，先复制目录再修改副本。
-- “原位更改模式”会重命名原目录，使用前确认已有备份。
-- 新旧目录名长度必须一致，避免破坏 UE 二进制路径偏移。
+- 切换到“原位更改模式”时会提示“该操作可能不可逆，注意备份！”。
+- 执行目录变更前会提示外部引用风险。
+- 新旧目录名长度不一致时允许继续，但会额外弹出二次确认。
 - 只替换已识别的旧 `/Game/.../` 前缀。
 
 ## 项目结构
@@ -73,6 +79,8 @@ config.py               默认配置
 requirements.txt        Python 依赖
 build_exe.spec          PyInstaller 打包配置
 assets/                 图标资源
+assets/app_icon.png     GUI 窗口图标
+assets/app.ico          Windows 可执行文件图标
 assets/ui-preview-matrix.png  软件界面截图
 test_parser.py          解析器基础测试
 test_asset.uasset       测试资产样例
@@ -97,7 +105,7 @@ dist\UEAssetPathFinder\UEAssetPathFinder.exe
 
 - 加密、压缩或自定义格式资产可能无法完整解析。
 - 超大资产只读取有限范围用于路径扫描，结果可能不完整。
-- 目录修复需要新旧目录名长度一致。
+- 不等长目录名变更会修改二进制路径长度，执行前必须确认已有备份。
 - CLI 中部分旧文本仍保留历史编码，GUI 主流程已可读。
 
 ## 许可证

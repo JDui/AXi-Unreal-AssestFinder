@@ -7,7 +7,7 @@ DEFAULT_PROJECT_PATH = None
 UI_THEME = "matrix-dark"
 WINDOW_TITLE = "AXi Unreal Asset Finder"
 WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 720
+WINDOW_HEIGHT = 820
 
 # Optional startup search paths
 DEFAULT_SEARCH_PATHS = []

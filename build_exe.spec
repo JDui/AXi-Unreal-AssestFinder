@@ -2,12 +2,13 @@
 from PyInstaller.utils.hooks import collect_data_files
 
 tkdnd_datas = collect_data_files("tkinterdnd2")
+app_datas = [('assets/app_icon.png', 'assets')]
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=tkdnd_datas,
+    datas=tkdnd_datas + app_datas,
     hiddenimports=['tkinterdnd2', 'tkinterdnd2.TkinterDnD', 'win32clipboard', 'win32con', 'win32api'],
     hookspath=[],
     hooksconfig={},

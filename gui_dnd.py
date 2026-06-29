@@ -16,7 +16,7 @@ import platform
 import sys
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, ttk
 from tkinter import font as tkfont
 from typing import Optional, List
 
@@ -95,9 +95,10 @@ class UEAssetFinderGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("AXi UE Asset Finder")
-        self.root.geometry("1000x720")
-        self.root.minsize(900, 620)
+        self.root.geometry("1000x820")
+        self.root.minsize(900, 760)
         self.root.resizable(True, True)
+        self.root.overrideredirect(True)
 
         self._init_theme()
         self._apply_window_icon()
@@ -120,6 +121,16 @@ class UEAssetFinderGUI:
         self._active_tab = "analyze"
         self._tab_buttons = {}
         self._panel_frames = []
+        self._dialog_result = None
+        self._relocate_last_mode = "副本粘贴模式"
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+        self._resize_start_x = 0
+        self._resize_start_y = 0
+        self._resize_start_w = 0
+        self._resize_start_h = 0
+        self._is_maximized = False
+        self._normal_geometry = ""
 
         # 设置样式并创建界面
         self.setup_styles()
@@ -153,6 +164,11 @@ class UEAssetFinderGUI:
         self.root.option_add("*selectBackground", self.colors["selection_bg"])
         self.root.option_add("*selectForeground", self.colors["selection_fg"])
         self.root.option_add("*inactiveselectBackground", self.colors["accent_dim"])
+        self.root.option_add("*TCombobox*Listbox.background", self.colors["terminal"])
+        self.root.option_add("*TCombobox*Listbox.foreground", self.colors["text"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", self.colors["selection_bg"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", self.colors["selection_fg"])
+        self.root.option_add("*TCombobox*Listbox.font", "Cascadia Code 10")
 
         available = set(tkfont.families(self.root))
 
@@ -257,6 +273,25 @@ class UEAssetFinderGUI:
         style.configure("TLabelFrame.Label", background=self.colors["bg"], foreground=self.colors["accent"], font=self.fonts["body_bold"])
         style.configure("TSeparator", background=self.colors["panel_line"])
         style.configure("TNotebook", background=self.colors["bg"], borderwidth=0)
+        scrollbar_style = {
+            "background": self.colors["accent_dim"],
+            "darkcolor": self.colors["terminal"],
+            "lightcolor": self.colors["panel_line"],
+            "troughcolor": self.colors["terminal"],
+            "bordercolor": self.colors["panel_line"],
+            "arrowcolor": self.colors["accent"],
+            "relief": tk.FLAT,
+            "borderwidth": 1,
+            "width": 14,
+        }
+        style.configure("Vertical.TScrollbar", **scrollbar_style)
+        style.configure("Matrix.Vertical.TScrollbar", **scrollbar_style)
+        style.map(
+            "Matrix.Vertical.TScrollbar",
+            background=[("active", self.colors["accent"]), ("pressed", self.colors["accent_soft"])],
+            arrowcolor=[("active", self.colors["selection_fg"]), ("pressed", self.colors["selection_fg"])],
+            troughcolor=[("active", self.colors["terminal"])],
+        )
         style.configure(
             "TNotebook.Tab",
             background=self.colors["panel"],
@@ -358,11 +393,244 @@ class UEAssetFinderGUI:
             thickness=6,
         )
 
+    def _make_title_button(self, parent, text: str, command):
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            width=4,
+            bg=self.colors["terminal"],
+            fg=self.colors["accent_soft"],
+            activebackground=self.colors["panel_high"],
+            activeforeground=self.colors["selection_bg"],
+            font=self.fonts["mono_bold"],
+            relief=tk.FLAT,
+            bd=0,
+            cursor="hand2",
+            highlightthickness=1,
+            highlightbackground=self.colors["panel_line"],
+        )
+
+    def _bind_drag(self, widget):
+        widget.bind("<ButtonPress-1>", self._begin_window_drag)
+        widget.bind("<B1-Motion>", self._drag_window)
+        widget.bind("<Double-1>", lambda _event: self._toggle_maximize())
+
+    def _begin_window_drag(self, event):
+        self._drag_start_x = event.x
+        self._drag_start_y = event.y
+
+    def _drag_window(self, event):
+        if self._is_maximized:
+            return
+        x = self.root.winfo_pointerx() - self._drag_start_x
+        y = self.root.winfo_pointery() - self._drag_start_y
+        self.root.geometry(f"+{x}+{y}")
+
+    def _restore_custom_chrome(self, _event=None):
+        if self.root.state() != "iconic":
+            self.root.overrideredirect(True)
+
+    def _minimize_window(self):
+        self.root.overrideredirect(False)
+        self.root.iconify()
+
+    def _toggle_maximize(self):
+        if self._is_maximized:
+            if self._normal_geometry:
+                self.root.geometry(self._normal_geometry)
+            self._is_maximized = False
+            return
+        self._normal_geometry = self.root.geometry()
+        width = self.root.winfo_screenwidth()
+        height = self.root.winfo_screenheight()
+        self.root.geometry(f"{width}x{height}+0+0")
+        self._is_maximized = True
+
+    def _begin_resize(self, event):
+        self._resize_start_x = event.x_root
+        self._resize_start_y = event.y_root
+        self._resize_start_w = self.root.winfo_width()
+        self._resize_start_h = self.root.winfo_height()
+
+    def _resize_window(self, event):
+        if self._is_maximized:
+            return
+        min_w, min_h = self.root.minsize()
+        width = max(min_w, self._resize_start_w + event.x_root - self._resize_start_x)
+        height = max(min_h, self._resize_start_h + event.y_root - self._resize_start_y)
+        self.root.geometry(f"{width}x{height}")
+
+    def _close_window(self):
+        self.root.destroy()
+
+    def _matrix_dialog(self, title: str, message: str, kind: str = "info", confirm: bool = False) -> bool:
+        dialog = tk.Toplevel(self.root)
+        dialog.overrideredirect(True)
+        dialog.transient(self.root)
+        dialog.configure(bg=self.colors["accent_dim"])
+        dialog.resizable(False, False)
+
+        shell = tk.Frame(dialog, bg=self.colors["terminal"], highlightbackground=self.colors["accent_soft"], highlightthickness=1)
+        shell.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+
+        top = tk.Frame(shell, bg=self.colors["panel_high"], height=34)
+        top.pack(fill=tk.X)
+        top.grid_propagate(False)
+        top.columnconfigure(1, weight=1)
+
+        prefix_color = self.colors["warning"] if kind == "warning" else self.colors["error"] if kind == "error" else self.colors["accent"]
+        tk.Label(
+            top,
+            text="SYS",
+            bg=prefix_color,
+            fg=self.colors["selection_fg"],
+            font=self.fonts["mono_bold"],
+            width=4,
+        ).grid(row=0, column=0, sticky="nsw", padx=(6, 10), pady=6)
+        tk.Label(
+            top,
+            text=title,
+            bg=self.colors["panel_high"],
+            fg=self.colors["accent_soft"],
+            font=self.fonts["mono_bold"],
+            anchor="w",
+        ).grid(row=0, column=1, sticky="nsew")
+
+        body = tk.Frame(shell, bg=self.colors["terminal"])
+        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 12))
+        tk.Label(
+            body,
+            text=message,
+            bg=self.colors["terminal"],
+            fg=self.colors["text"],
+            font=self.fonts["body"],
+            justify="left",
+            wraplength=520,
+        ).pack(anchor="w")
+
+        button_row = tk.Frame(shell, bg=self.colors["terminal"])
+        button_row.pack(fill=tk.X, padx=16, pady=(0, 16))
+        result = {"value": False}
+
+        def finish(value: bool):
+            result["value"] = value
+            dialog.destroy()
+
+        if confirm:
+            cancel_btn = self._make_dialog_button(button_row, "取消", lambda: finish(False), primary=False)
+            cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+            ok_btn = self._make_dialog_button(button_row, "确认", lambda: finish(True), primary=True)
+            ok_btn.pack(side=tk.RIGHT)
+            dialog.bind("<Escape>", lambda _event: finish(False))
+            dialog.bind("<Return>", lambda _event: finish(True))
+        else:
+            ok_btn = self._make_dialog_button(button_row, "确认", lambda: finish(True), primary=True)
+            ok_btn.pack(side=tk.RIGHT)
+            dialog.bind("<Escape>", lambda _event: finish(True))
+            dialog.bind("<Return>", lambda _event: finish(True))
+
+        dialog.update_idletasks()
+        width = max(dialog.winfo_width(), 560)
+        height = dialog.winfo_height()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+        dialog.grab_set()
+        ok_btn.focus_set()
+        self.root.wait_window(dialog)
+        return result["value"]
+
+    def _make_dialog_button(self, parent, text: str, command, primary: bool):
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            width=10,
+            bg=self.colors["accent"] if primary else self.colors["panel_high"],
+            fg=self.colors["selection_fg"] if primary else self.colors["accent_soft"],
+            activebackground=self.colors["accent_soft"] if primary else self.colors["terminal_line"],
+            activeforeground=self.colors["selection_fg"] if primary else self.colors["accent"],
+            font=self.fonts["button"],
+            relief=tk.FLAT,
+            bd=0,
+            cursor="hand2",
+            padx=10,
+            pady=6,
+            highlightthickness=1,
+            highlightbackground=self.colors["accent_dim"] if primary else self.colors["panel_line"],
+        )
+
+    def _show_info(self, title: str, message: str):
+        self._matrix_dialog(title, message, "info", confirm=False)
+
+    def _show_warning(self, title: str, message: str):
+        self._matrix_dialog(title, message, "warning", confirm=False)
+
+    def _show_error(self, title: str, message: str):
+        self._matrix_dialog(title, message, "error", confirm=False)
+
+    def _confirm(self, title: str, message: str, kind: str = "warning") -> bool:
+        return self._matrix_dialog(title, message, kind, confirm=True)
+
     def create_ui(self):
-        main_frame = ttk.Frame(self.root, padding=12)
+        self.root.bind("<Map>", self._restore_custom_chrome)
+        self.window_shell = tk.Frame(
+            self.root,
+            bg=self.colors["accent_dim"],
+            highlightbackground=self.colors["accent_soft"],
+            highlightthickness=1,
+        )
+        self.window_shell.pack(fill=tk.BOTH, expand=True)
+
+        title_bar = tk.Frame(self.window_shell, bg=self.colors["terminal"], height=36)
+        title_bar.pack(fill=tk.X, padx=2, pady=(2, 0))
+        title_bar.grid_propagate(False)
+        title_bar.columnconfigure(1, weight=1)
+        self._bind_drag(title_bar)
+
+        title_mark = tk.Label(
+            title_bar,
+            text="AX",
+            bg=self.colors["accent"],
+            fg=self.colors["selection_fg"],
+            font=self.fonts["mono_bold"],
+            width=3,
+        )
+        title_mark.grid(row=0, column=0, sticky="nsw", padx=(6, 10), pady=6)
+        self._bind_drag(title_mark)
+
+        title_label = tk.Label(
+            title_bar,
+            text="AXi UE Asset Finder  //  MATRIX PACKAGE TOOL",
+            bg=self.colors["terminal"],
+            fg=self.colors["accent_soft"],
+            font=self.fonts["status"],
+            anchor="w",
+        )
+        title_label.grid(row=0, column=1, sticky="nsew")
+        self._bind_drag(title_label)
+
+        self._make_title_button(title_bar, "_", self._minimize_window).grid(row=0, column=2, padx=(4, 0), pady=5)
+        self._make_title_button(title_bar, "□", self._toggle_maximize).grid(row=0, column=3, padx=(4, 0), pady=5)
+        self._make_title_button(title_bar, "X", self._close_window).grid(row=0, column=4, padx=(4, 6), pady=5)
+
+        title_bar_line = tk.Canvas(self.window_shell, height=5, bg=self.colors["terminal"], highlightthickness=0)
+        title_bar_line.pack(fill=tk.X, padx=2)
+        title_bar_line.create_line(0, 2, 2000, 2, fill=self.colors["accent_dim"])
+        title_bar_line.create_line(38, 4, 260, 4, fill=self.colors["accent"])
+
+        main_frame = ttk.Frame(self.window_shell, padding=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.columnconfigure(0, weight=1)
         main_frame.rowconfigure(3, weight=1)
+
+        self.resize_handle = tk.Canvas(self.window_shell, width=18, height=18, bg=self.colors["terminal"], highlightthickness=0, cursor="size_nw_se")
+        self.resize_handle.place(relx=1.0, rely=1.0, anchor="se")
+        self.resize_handle.create_line(4, 16, 16, 4, fill=self.colors["accent_dim"])
+        self.resize_handle.create_line(9, 16, 16, 9, fill=self.colors["accent"])
+        self.resize_handle.bind("<ButtonPress-1>", self._begin_resize)
+        self.resize_handle.bind("<B1-Motion>", self._resize_window)
 
         header = tk.Frame(
             main_frame,
@@ -633,8 +901,19 @@ class UEAssetFinderGUI:
         result_frame.columnconfigure(0, weight=1)
         result_frame.rowconfigure(0, weight=1)
 
-        self.result_text = scrolledtext.ScrolledText(
+        result_text_shell = tk.Frame(
             result_frame,
+            bg=self.colors["terminal"],
+            highlightthickness=1,
+            highlightbackground=self.colors["terminal_line"],
+            highlightcolor=self.colors["accent"],
+        )
+        result_text_shell.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        result_text_shell.columnconfigure(0, weight=1)
+        result_text_shell.rowconfigure(0, weight=1)
+
+        self.result_text = tk.Text(
+            result_text_shell,
             height=20,
             font=self.fonts["mono"],
             wrap=tk.WORD,
@@ -643,15 +922,21 @@ class UEAssetFinderGUI:
             insertbackground=self.colors["accent"],
             relief=tk.FLAT,
             bd=0,
-            highlightthickness=1,
-            highlightbackground=self.colors["terminal_line"],
-            highlightcolor=self.colors["accent"],
+            highlightthickness=0,
             selectbackground=self.colors["selection_bg"],
             selectforeground=self.colors["selection_fg"],
             padx=10,
             pady=8,
         )
-        self.result_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.result_text.grid(row=0, column=0, sticky="nsew")
+        self.result_scroll = ttk.Scrollbar(
+            result_text_shell,
+            orient="vertical",
+            command=self.result_text.yview,
+            style="Matrix.Vertical.TScrollbar",
+        )
+        self.result_scroll.grid(row=0, column=1, sticky="ns")
+        self.result_text.configure(yscrollcommand=self.result_scroll.set)
         self._setup_text_tags()
         self.result_text.configure(state=tk.DISABLED)
 
@@ -775,7 +1060,12 @@ class UEAssetFinderGUI:
         self.relocate_tree.tag_configure("error", foreground=self.colors["error"])
         self.relocate_tree.tag_configure("ok", foreground=self.colors["success"])
 
-        tree_scroll = ttk.Scrollbar(result_frame, orient="vertical", command=self.relocate_tree.yview)
+        tree_scroll = ttk.Scrollbar(
+            result_frame,
+            orient="vertical",
+            command=self.relocate_tree.yview,
+            style="Matrix.Vertical.TScrollbar",
+        )
         tree_scroll.grid(row=0, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.relocate_tree.configure(yscrollcommand=tree_scroll.set)
         self.relocate_tree.bind("<Double-1>", self._on_relocate_item_double_click)
@@ -834,10 +1124,11 @@ class UEAssetFinderGUI:
         )
         self.relocate_mode_combo.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
         self.relocate_mode_combo.bind("<Button-1>", lambda _event: self.relocate_mode_combo.focus_set())
+        self.relocate_mode_combo.bind("<<ComboboxSelected>>", self._on_relocate_mode_selected)
 
         self.relocate_tip_label = tk.Label(
             rename_inner,
-            text="提示：为保证安全，当前仅支持新旧目录名长度一致。",
+            text="提示：不等长目录名会触发二次确认，建议先备份资产目录。",
             bg=self.colors["panel"],
             fg=self.colors["text_muted"],
             font=self.fonts["status"],
@@ -1212,6 +1503,12 @@ class UEAssetFinderGUI:
         self.relocate_mode_combo.configure(state="readonly")
         self.relocate_execute_btn.configure(state="normal" if enabled else "disabled")
 
+    def _on_relocate_mode_selected(self, _event=None):
+        mode = self.relocate_mode_var.get()
+        if mode == "原位更改模式" and self._relocate_last_mode != mode:
+            self._show_warning("原位更改模式", "该操作可能不可逆，注意备份！")
+        self._relocate_last_mode = mode
+
     def _set_folder_hint(self, text: str, kind: str = "normal"):
         self.folder_hint_var.set(text)
         color = self.colors["text_muted"]
@@ -1285,7 +1582,7 @@ class UEAssetFinderGUI:
                 self._set_folder_hint("文件夹不存在", "warning")
         except Exception as exc:
             self._set_folder_hint("拖拽失败", "error")
-            messagebox.showerror("错误", f"拖拽处理出错:\n{exc}")
+            self._show_error("拖拽处理出错", str(exc))
 
     def _collect_asset_files(self, folder_path: str, include_sidecars: bool = False) -> List[str]:
         exts = {".uasset", ".umap"}
@@ -1340,10 +1637,10 @@ class UEAssetFinderGUI:
         """校验文件夹下资产的相对路径"""
         folder_path = self.folder_path_var.get().strip()
         if not folder_path:
-            messagebox.showwarning("提示", "请先选择文件夹")
+            self._show_warning("提示", "请先选择文件夹")
             return
         if not os.path.isdir(folder_path):
-            messagebox.showwarning("提示", "文件夹不存在: " + folder_path)
+            self._show_warning("提示", "文件夹不存在: " + folder_path)
             return
 
         self.relocate_tree.delete(*self.relocate_tree.get_children())
@@ -1415,8 +1712,6 @@ class UEAssetFinderGUI:
         count = data.count(old_bytes)
         if count == 0:
             return 0
-        if len(old_bytes) != len(new_bytes):
-            raise ValueError("prefix length mismatch")
         new_data = data.replace(old_bytes, new_bytes)
         if new_data != data:
             self._ensure_writable(file_path)
@@ -1434,28 +1729,34 @@ class UEAssetFinderGUI:
     def execute_relocate(self):
         """执行目录名变更"""
         if not self.relocate_ready:
-            messagebox.showwarning("提示", "请先检测路径并确保无异常")
+            self._show_warning("提示", "请先检测路径并确保无异常")
             return
 
         new_name = self.relocate_name_var.get().strip()
         if not new_name:
-            messagebox.showwarning("提示", "请输入新的目录名")
+            self._show_warning("提示", "请输入新的目录名")
             return
 
         invalid_chars = set('<>:"/\\|?*')
         if any(ch in invalid_chars for ch in new_name):
-            messagebox.showwarning("提示", "目录名包含非法字符")
+            self._show_warning("提示", "目录名包含非法字符")
             return
 
         old_name = self.relocate_rel_parts[-1]
         if new_name == old_name:
-            messagebox.showinfo("提示", "新目录名与旧目录名相同，无需变更")
+            self._show_info("提示", "新目录名与旧目录名相同，无需变更")
             return
 
         old_prefix = self.relocate_old_prefix
         new_prefix = self._build_new_prefix(new_name)
         if len(old_prefix) != len(new_prefix):
-            messagebox.showwarning("提示", "新旧目录名长度不同，为避免破坏资产，需保持长度一致")
+            if not self._confirm("二次确认", "新旧目录名长度不一致，资产二进制路径长度会发生变化。请确认已经备份，并理解该操作可能导致异常引用。是否继续？"):
+                return
+
+        if not self._confirm(
+            "确认目录变更",
+            "即将变更目录，修改目录只能保证目录下的资产变更，目录之外引用到原本目录中的资产将会丢失引用。",
+        ):
             return
 
         mode_label = self.relocate_mode_var.get()
@@ -1466,18 +1767,18 @@ class UEAssetFinderGUI:
         try:
             if mode == "copy":
                 if os.path.exists(dest_folder):
-                    overwrite = messagebox.askyesno("提示", "目标文件夹已存在，是否删除后重新创建？")
+                    overwrite = self._confirm("提示", "目标文件夹已存在，是否删除后重新创建？")
                     if not overwrite:
                         return
                     shutil.rmtree(dest_folder)
                 shutil.copytree(src_folder, dest_folder)
             else:
                 if os.path.exists(dest_folder):
-                    messagebox.showwarning("提示", "目标文件夹已存在，请更换名称")
+                    self._show_warning("提示", "目标文件夹已存在，请更换名称")
                     return
                 os.rename(src_folder, dest_folder)
         except Exception as exc:
-            messagebox.showerror("错误", f"文件夹操作失败:\n{exc}")
+            self._show_error("文件夹操作失败", str(exc))
             self._set_status("目录变更失败", "error")
             return
 
@@ -1494,7 +1795,7 @@ class UEAssetFinderGUI:
                     modified_files += 1
                     total_hits += count
         except Exception as exc:
-            messagebox.showerror("错误", f"更新资产路径失败:\n{exc}")
+            self._show_error("更新资产路径失败", str(exc))
             self._set_status("资产更新失败", "error")
             return
 
@@ -1525,10 +1826,10 @@ class UEAssetFinderGUI:
         """分析 UE 资产文件"""
         file_path = self.asset_file_var.get().strip()
         if not file_path:
-            messagebox.showwarning("提示", "请先选择文件")
+            self._show_warning("提示", "请先选择文件")
             return
         if not os.path.isfile(file_path):
-            messagebox.showwarning("提示", "文件不存在: " + file_path)
+            self._show_warning("提示", "文件不存在: " + file_path)
             return
 
         self.result_text.configure(state=tk.NORMAL)
