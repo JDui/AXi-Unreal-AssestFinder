@@ -41,6 +41,8 @@ python main.py "D:\Project\Content\Characters"
 
 ## 界面
 
+![AXi Unreal Asset Finder Matrix UI](assets/ui-preview-matrix.png)
+
 `v1.1.0` 使用深色矩阵风格 UI：
 
 - 绿色终端配色
@@ -71,6 +73,7 @@ config.py               默认配置
 requirements.txt        Python 依赖
 build_exe.spec          PyInstaller 打包配置
 assets/                 图标资源
+assets/ui-preview-matrix.png  软件界面截图
 test_parser.py          解析器基础测试
 test_asset.uasset       测试资产样例
 DEVELOPMENT.md          开发、测试、打包说明
