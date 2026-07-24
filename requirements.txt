@@ -1,8 +1,5 @@
 # Runtime drag-and-drop support
 tkinterdnd2>=0.3.0
 
-# Windows helper modules used by legacy drag-and-drop helpers and build hidden imports
-pywin32>=306; platform_system == "Windows"
-
 # Build tool
 pyinstaller>=6.0

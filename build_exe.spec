@@ -9,19 +9,18 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=tkdnd_datas + app_datas,
-    hiddenimports=['tkinterdnd2', 'tkinterdnd2.TkinterDnD', 'win32clipboard', 'win32con', 'win32api'],
+    hiddenimports=['tkinterdnd2', 'tkinterdnd2.TkinterDnD'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludedimports=[],
+    excludes=[],
     noarchive=False,
 )
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
-    [],
     [],
     name='UEAssetPathFinder',
     exclude_binaries=True,

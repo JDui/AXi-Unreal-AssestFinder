@@ -2,6 +2,7 @@
 
 # Optional Unreal project root. Keep None to let users choose paths at runtime.
 DEFAULT_PROJECT_PATH = None
+APP_VERSION = "2.0.0"
 
 # UI defaults
 UI_THEME = "matrix-dark"

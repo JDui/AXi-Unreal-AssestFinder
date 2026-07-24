@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import ctypes
+import threading
 import time
 from ctypes import wintypes
 import platform
@@ -21,6 +22,7 @@ from tkinter import font as tkfont
 from typing import Any, Dict, Optional, List
 
 from asset_finder import UEAssetFinder
+from asset_diff import ComparisonResult, compare_asset_folders, export_difference_package
 from ue_parser import UEAssetParser, UEPathExtractor
 
 
@@ -89,12 +91,31 @@ except ImportError:
     HAS_DND = False
 
 
+def _taskbar_extended_style(current_style: int) -> int:
+    """Force a regular taskbar window instead of an override-redirect tool window."""
+
+    ws_ex_toolwindow = 0x00000080
+    ws_ex_appwindow = 0x00040000
+    return (current_style & ~ws_ex_toolwindow) | ws_ex_appwindow
+
+
+def _window_drag_offset(
+    pointer_x: int,
+    pointer_y: int,
+    window_x: int,
+    window_y: int,
+) -> tuple[int, int]:
+    """Return a stable screen-space pointer offset for borderless dragging."""
+
+    return pointer_x - window_x, pointer_y - window_y
+
+
 class UEAssetFinderGUI:
     """UE 资产分析工具的 GUI 应用"""
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AXi UE Asset Finder")
+        self.root.title("AXi UE Asset Finder 2.0")
         self.root.geometry("1000x820")
         self.root.minsize(900, 760)
         self.root.resizable(True, True)
@@ -117,6 +138,10 @@ class UEAssetFinderGUI:
         self._call_wndproc = None
         self._drop_hover = False
         self._folder_drop_hover = False
+        self._compare_busy = False
+        self.compare_result: Optional[ComparisonResult] = None
+        self._diff_entries_by_iid = {}
+        self._selected_diff_paths = set()
         self._analysis_active = False
         self._active_tab = "analyze"
         self._tab_buttons = {}
@@ -140,6 +165,7 @@ class UEAssetFinderGUI:
         self.create_ui()
         self.center_window()
         self._start_drop_pulse()
+        self.root.after_idle(self._apply_windows_taskbar_style)
         if not HAS_DND:
             self.root.after(120, self._late_enable_win_drop)
 
@@ -420,23 +446,82 @@ class UEAssetFinderGUI:
         widget.bind("<Double-1>", lambda _event: self._toggle_maximize())
 
     def _begin_window_drag(self, event):
-        self._drag_start_x = event.x
-        self._drag_start_y = event.y
+        self._drag_start_x, self._drag_start_y = _window_drag_offset(
+            event.x_root,
+            event.y_root,
+            self.root.winfo_x(),
+            self.root.winfo_y(),
+        )
 
     def _drag_window(self, event):
         if self._is_maximized:
             return
-        x = self.root.winfo_pointerx() - self._drag_start_x
-        y = self.root.winfo_pointery() - self._drag_start_y
+        x = event.x_root - self._drag_start_x
+        y = event.y_root - self._drag_start_y
         self.root.geometry(f"+{x}+{y}")
 
     def _restore_custom_chrome(self, _event=None):
         if self.root.state() != "iconic":
-            self.root.overrideredirect(True)
+            if not self.root.overrideredirect():
+                self.root.overrideredirect(True)
+            self.root.after_idle(self._apply_windows_taskbar_style)
 
     def _minimize_window(self):
         self.root.overrideredirect(False)
+        self._apply_windows_taskbar_style()
         self.root.iconify()
+
+    def _apply_windows_taskbar_style(self):
+        if os.name != "nt" or not self.root.winfo_exists():
+            return
+        try:
+            self.root.update_idletasks()
+            user32 = ctypes.windll.user32
+            child_hwnd = wintypes.HWND(self.root.winfo_id())
+            user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            user32.GetAncestor.restype = wintypes.HWND
+            hwnd = user32.GetAncestor(child_hwnd, 2) or child_hwnd
+
+            long_ptr = (
+                ctypes.c_longlong
+                if ctypes.sizeof(ctypes.c_void_p) == 8
+                else ctypes.c_long
+            )
+            get_window_long = user32.GetWindowLongPtrW
+            set_window_long = user32.SetWindowLongPtrW
+            get_window_long.argtypes = [wintypes.HWND, ctypes.c_int]
+            get_window_long.restype = long_ptr
+            set_window_long.argtypes = [wintypes.HWND, ctypes.c_int, long_ptr]
+            set_window_long.restype = long_ptr
+
+            gwl_exstyle = -20
+            current_style = int(get_window_long(hwnd, gwl_exstyle))
+            desired_style = _taskbar_extended_style(current_style)
+            if desired_style != current_style:
+                set_window_long(hwnd, gwl_exstyle, desired_style)
+
+            swp_flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND,
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wintypes.UINT,
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+            user32.SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                swp_flags,
+            )
+        except (AttributeError, OSError, tk.TclError):
+            pass
 
     def _toggle_maximize(self):
         if self._is_maximized:
@@ -605,7 +690,7 @@ class UEAssetFinderGUI:
 
         title_label = tk.Label(
             title_bar,
-            text="AXi UE Asset Finder  //  MATRIX PACKAGE TOOL",
+            text="AXi UE Asset Finder 2.0  //  MATRIX PACKAGE TOOL",
             bg=self.colors["terminal"],
             fg=self.colors["accent_soft"],
             font=self.fonts["status"],
@@ -648,8 +733,8 @@ class UEAssetFinderGUI:
             icon_label = tk.Label(header, image=self.header_icon, bg=self.colors["panel_high"])
             icon_label.grid(row=0, column=0, rowspan=2, padx=(0, 12))
 
-        ttk.Label(header, text="UE 资产分析工具 // AXi PATHFINDER", style="Title.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(header, text="MATRIX ROUTE SCANNER / 拖拽 UE 资源文件或文件夹进行分析与修复", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(header, text="UE 资产分析工具 2.0 // AXi PATHFINDER", style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header, text="MATRIX ROUTE SCANNER / 分析、修复、更新比对与差异包导出", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
 
         self.matrix_strip = tk.Canvas(
             main_frame,
@@ -664,10 +749,11 @@ class UEAssetFinderGUI:
 
         self.tab_bar = tk.Frame(main_frame, bg=self.colors["bg"])
         self.tab_bar.grid(row=2, column=0, sticky="ew", pady=(0, 6))
-        self.tab_bar.columnconfigure(2, weight=1)
+        self.tab_bar.columnconfigure(3, weight=1)
 
         self._create_tab_button("analyze", "ASSET ANALYZE", "资产分析", 0)
         self._create_tab_button("relocate", "PATH REPAIR", "目录修复", 1)
+        self._create_tab_button("compare", "ASSET DIFF", "资产更新比对", 2)
 
         self.content_frame = tk.Frame(
             main_frame,
@@ -681,7 +767,8 @@ class UEAssetFinderGUI:
 
         self.tab_analyze = tk.Frame(self.content_frame, bg=self.colors["bg"])
         self.tab_relocate = tk.Frame(self.content_frame, bg=self.colors["bg"])
-        for tab in (self.tab_analyze, self.tab_relocate):
+        self.tab_compare = tk.Frame(self.content_frame, bg=self.colors["bg"])
+        for tab in (self.tab_analyze, self.tab_relocate, self.tab_compare):
             tab.grid(row=0, column=0, sticky="nsew")
 
         self.analysis_flow = tk.Canvas(
@@ -696,6 +783,7 @@ class UEAssetFinderGUI:
 
         self._build_analyze_tab(self.tab_analyze)
         self._build_relocate_tab(self.tab_relocate)
+        self._build_compare_tab(self.tab_compare)
         self._select_tab("analyze")
 
         self.status_var = tk.StringVar(value="就绪")
@@ -776,8 +864,10 @@ class UEAssetFinderGUI:
         self._active_tab = key
         if key == "analyze":
             self.tab_analyze.tkraise()
-        else:
+        elif key == "relocate":
             self.tab_relocate.tkraise()
+        else:
+            self.tab_compare.tkraise()
         for tab_key in self._tab_buttons:
             self._draw_tab_button(tab_key)
 
@@ -1229,6 +1319,169 @@ class UEAssetFinderGUI:
         self.relocate_tip_label.grid(row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(4, 0))
 
         self._toggle_relocate_controls(False)
+
+    def _build_compare_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        folder_section, folder_frame = self._create_section(parent, "Old / New 文件夹", icon_kind="folder")
+        folder_section.grid(row=0, column=0, sticky="ew", padx=2, pady=(2, 8))
+        folder_frame.columnconfigure(0, weight=1)
+        folder_frame.columnconfigure(1, weight=1)
+
+        self.compare_old_var = tk.StringVar()
+        self.compare_new_var = tk.StringVar()
+        self._create_compare_drop_zone(folder_frame, "old", "OLD / 旧版本", self.compare_old_var, 0)
+        self._create_compare_drop_zone(folder_frame, "new", "NEW / 新版本", self.compare_new_var, 1)
+
+        compare_control = tk.Frame(parent, bg=self.colors["bg"])
+        compare_control.grid(row=1, column=0, sticky="ew", padx=2, pady=(0, 8))
+        compare_control.columnconfigure(0, weight=1)
+        self.compare_summary_var = tk.StringVar(
+            value="等待比对 · 从含 Content 的一侧计算 /Game；另一侧可为独立更新目录"
+        )
+        self.compare_summary_label = tk.Label(
+            compare_control,
+            textvariable=self.compare_summary_var,
+            bg=self.colors["bg"],
+            fg=self.colors["text_muted"],
+            font=self.fonts["status"],
+            anchor="w",
+        )
+        self.compare_summary_label.grid(row=0, column=0, sticky="ew")
+        self.diff_compare_btn = self._make_action_button(
+            compare_control,
+            "开始比对",
+            self.start_asset_compare,
+            primary=True,
+            width=11,
+        )
+        self.diff_compare_btn.grid(row=0, column=1, padx=(8, 0))
+        self.compare_progress = ttk.Progressbar(
+            compare_control,
+            mode="indeterminate",
+            style="Accent.Horizontal.TProgressbar",
+        )
+        self.compare_progress.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        self.compare_progress.grid_remove()
+
+        result_section, result_frame = self._create_section(parent, "差异结果", icon_kind="result")
+        result_section.grid(row=2, column=0, sticky="nsew", padx=2, pady=(0, 8))
+        result_frame.columnconfigure(0, weight=1)
+        result_frame.rowconfigure(0, weight=1)
+
+        self.diff_tree = ttk.Treeview(
+            result_frame,
+            columns=("selected", "status", "path", "old_size", "new_size"),
+            show="headings",
+            selectmode="extended",
+        )
+        self.diff_tree.heading("selected", text="导出")
+        self.diff_tree.heading("status", text="差异依据")
+        self.diff_tree.heading("path", text="/Game 相对路径")
+        self.diff_tree.heading("old_size", text="Old 大小")
+        self.diff_tree.heading("new_size", text="New 大小")
+        self.diff_tree.column("selected", width=58, minwidth=58, anchor="center", stretch=False)
+        self.diff_tree.column("status", width=82, minwidth=72, anchor="center", stretch=False)
+        self.diff_tree.column("path", width=520, minwidth=260, anchor="w")
+        self.diff_tree.column("old_size", width=100, minwidth=82, anchor="e", stretch=False)
+        self.diff_tree.column("new_size", width=100, minwidth=82, anchor="e", stretch=False)
+        self.diff_tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        self.diff_tree.tag_configure("added", foreground=self.colors["success"])
+        self.diff_tree.tag_configure("modified", foreground=self.colors["warning"])
+        self.diff_tree.tag_configure("deleted", foreground=self.colors["error"])
+        self.diff_tree.bind("<Button-1>", self._on_diff_tree_click)
+        self.diff_tree.bind("<space>", self._on_diff_tree_space)
+
+        diff_scroll = ttk.Scrollbar(
+            result_frame,
+            orient="vertical",
+            command=self.diff_tree.yview,
+            style="Matrix.Vertical.TScrollbar",
+        )
+        diff_scroll.grid(row=0, column=1, sticky="ns", pady=10, padx=(0, 10))
+        self.diff_tree.configure(yscrollcommand=diff_scroll.set)
+
+        action_row = tk.Frame(parent, bg=self.colors["bg"])
+        action_row.grid(row=3, column=0, sticky="ew", padx=2, pady=(0, 4))
+        self._make_action_button(
+            action_row, "全选", lambda: self._set_all_diff_selected(True), width=8
+        ).pack(side=tk.LEFT)
+        self._make_action_button(
+            action_row, "全不选", lambda: self._set_all_diff_selected(False), width=8
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        self.diff_export_selected_btn = self._make_action_button(
+            action_row,
+            "导出所选",
+            lambda: self.export_asset_diff(False),
+            primary=True,
+            width=11,
+        )
+        self.diff_export_selected_btn.pack(side=tk.RIGHT)
+        self.diff_export_all_btn = self._make_action_button(
+            action_row,
+            "全部导出",
+            lambda: self.export_asset_diff(True),
+            width=11,
+        )
+        self.diff_export_all_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        self._set_diff_export_enabled(False)
+
+    def _create_compare_drop_zone(self, parent, kind: str, title: str, variable: tk.StringVar, column: int):
+        zone = tk.Frame(
+            parent,
+            bg=self.colors["terminal"],
+            highlightbackground=self.colors["panel_line"],
+            highlightthickness=2,
+        )
+        zone.grid(
+            row=0,
+            column=column,
+            sticky="nsew",
+            padx=(10, 5) if column == 0 else (5, 10),
+            pady=10,
+        )
+        zone.columnconfigure(0, weight=1)
+        label = tk.Label(
+            zone,
+            text=f"{title}  ·  拖入任意上层目录",
+            bg=self.colors["terminal"],
+            fg=self.colors["accent_soft"],
+            font=self.fonts["body_bold"],
+        )
+        label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 5))
+        entry = tk.Entry(
+            zone,
+            textvariable=variable,
+            font=self.fonts["mono"],
+            bg=self.colors["panel"],
+            fg=self.colors["text"],
+            insertbackground=self.colors["accent"],
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.colors["terminal_line"],
+            highlightcolor=self.colors["accent"],
+            selectbackground=self.colors["selection_bg"],
+            selectforeground=self.colors["selection_fg"],
+        )
+        entry.grid(row=1, column=0, sticky="ew", padx=(10, 6), pady=(0, 9))
+        self._make_action_button(
+            zone,
+            "浏览",
+            lambda folder_kind=kind: self.browse_compare_folder(folder_kind),
+            width=7,
+        ).grid(row=1, column=1, padx=(0, 10), pady=(0, 9))
+
+        if HAS_DND:
+            for widget in (zone, label, entry):
+                try:
+                    widget.drop_target_register(DND_FILES)
+                    widget.dnd_bind(
+                        "<<Drop>>",
+                        lambda event, folder_kind=kind: self.on_drop_compare_folder(event, folder_kind),
+                    )
+                except Exception:
+                    pass
 
     def _create_section(self, parent, title: str, icon_kind: str = "file"):
         section = tk.Frame(parent, bg=self.colors["bg"])
@@ -1683,6 +1936,14 @@ class UEAssetFinderGUI:
             return
         path = files[0]
         if os.path.isdir(path):
+            if self._active_tab == "compare":
+                if not self.compare_old_var.get().strip():
+                    self.compare_old_var.set(path)
+                else:
+                    self.compare_new_var.set(path)
+                if self.compare_old_var.get().strip() and self.compare_new_var.get().strip():
+                    self.start_asset_compare()
+                return
             self.folder_path_var.set(path)
             self._select_tab("relocate")
             self.validate_folder()
@@ -1793,6 +2054,243 @@ class UEAssetFinderGUI:
         except Exception as exc:
             self._set_folder_hint("拖拽失败", "error")
             self._show_error("拖拽处理出错", str(exc))
+
+    def browse_compare_folder(self, kind: str):
+        title = "选择旧版本 UE 资产文件夹" if kind == "old" else "选择新版本 UE 资产文件夹"
+        folder_path = filedialog.askdirectory(title=title)
+        if folder_path:
+            variable = self.compare_old_var if kind == "old" else self.compare_new_var
+            variable.set(folder_path)
+
+    def on_drop_compare_folder(self, event, kind: str):
+        try:
+            files = self._parse_drop_files(event.data)
+            if not files:
+                return
+            folder_path = files[0].strip()
+            if os.path.isfile(folder_path):
+                folder_path = os.path.dirname(folder_path)
+            if not os.path.isdir(folder_path):
+                self._show_warning("文件夹无效", f"路径不存在:\n{folder_path}")
+                return
+            variable = self.compare_old_var if kind == "old" else self.compare_new_var
+            variable.set(folder_path)
+        except Exception as exc:
+            self._show_error("拖拽处理出错", str(exc))
+
+    @staticmethod
+    def _format_file_size(size: Optional[int]) -> str:
+        if size is None:
+            return "—"
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024.0 or unit == "TB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024.0
+        return f"{size} B"
+
+    def _set_compare_busy(self, busy: bool):
+        self._compare_busy = busy
+        self.diff_compare_btn.configure(state=tk.DISABLED if busy else tk.NORMAL)
+        if busy:
+            self.compare_progress.grid()
+            self.compare_progress.start(12)
+            self._set_diff_export_enabled(False)
+        else:
+            self.compare_progress.stop()
+            self.compare_progress.grid_remove()
+            self._set_diff_export_enabled(bool(self.compare_result and self.compare_result.entries))
+
+    def start_asset_compare(self):
+        if self._compare_busy:
+            return
+        old_root = self.compare_old_var.get().strip()
+        new_root = self.compare_new_var.get().strip()
+        if not old_root or not new_root:
+            self._show_warning("缺少文件夹", "请分别拖入或选择 Old 与 New 文件夹。")
+            return
+
+        self.compare_result = None
+        self._diff_entries_by_iid.clear()
+        self._selected_diff_paths.clear()
+        for item in self.diff_tree.get_children():
+            self.diff_tree.delete(item)
+        self.compare_summary_var.set("精确内容比对中（忽略文件修改时间）…")
+        self.compare_summary_label.configure(fg=self.colors["text_muted"])
+        self._set_status("正在比对 Old / New 资产目录")
+        self._set_compare_busy(True)
+
+        def worker():
+            try:
+                result = compare_asset_folders(old_root, new_root)
+                self.root.after(0, lambda: self._finish_asset_compare(result, None))
+            except Exception as exc:
+                self.root.after(0, lambda error=exc: self._finish_asset_compare(None, error))
+
+        threading.Thread(target=worker, name="asset-diff-scan", daemon=True).start()
+
+    def _finish_asset_compare(self, result: Optional[ComparisonResult], error: Optional[Exception]):
+        if error is not None:
+            error_text = " ".join(str(error).split())
+            if len(error_text) > 140:
+                error_text = error_text[:137] + "..."
+            self.compare_summary_var.set(f"比对失败：{error_text}")
+            self.compare_summary_label.configure(fg=self.colors["error"])
+            self._set_compare_busy(False)
+            self._set_status(f"资产更新比对失败：{error_text}", "error")
+            return
+
+        self.compare_result = result
+        self._diff_entries_by_iid.clear()
+        self._selected_diff_paths = {entry.relative_path.casefold() for entry in result.entries}
+        status_labels = {
+            "added": "新增",
+            "deleted": "删除",
+            "size_changed": "修改·大小",
+            "content_changed": "修改·内容",
+        }
+        for index, entry in enumerate(result.entries):
+            item_id = f"diff-{index}"
+            self._diff_entries_by_iid[item_id] = entry
+            self.diff_tree.insert(
+                "",
+                tk.END,
+                iid=item_id,
+                values=(
+                    "☑",
+                    status_labels.get(entry.reason, status_labels.get(entry.status, entry.status)),
+                    entry.relative_path,
+                    self._format_file_size(entry.old_size),
+                    self._format_file_size(entry.new_size),
+                ),
+                tags=(entry.status,),
+            )
+
+        self._set_compare_busy(False)
+        self._update_diff_summary()
+        if result.entries:
+            self.compare_summary_label.configure(fg=self.colors["accent_soft"])
+            self._set_status(f"比对完成：发现 {len(result.entries)} 项差异", "success")
+        else:
+            self.compare_summary_label.configure(fg=self.colors["success"])
+            self._set_status("比对完成：无差异", "success")
+
+    def _update_diff_summary(self):
+        result = self.compare_result
+        if not result:
+            return
+        selected_count = len(self._selected_diff_paths)
+        self.compare_summary_var.set(
+            f"精确内容（忽略修改时间）  |  新增 {result.added_count}  |  "
+            f"修改 {result.modified_count}（大小 {result.size_changed_count} / 内容 {result.content_changed_count}）  |  "
+            f"删除 {result.deleted_count}  |  未变 {result.unchanged_count}  |  "
+            f"已选 {selected_count}/{len(result.entries)}  |  {result.elapsed_seconds:.2f}s"
+        )
+
+    def _set_diff_export_enabled(self, enabled: bool):
+        state = tk.NORMAL if enabled else tk.DISABLED
+        if getattr(self, "diff_export_selected_btn", None):
+            self.diff_export_selected_btn.configure(state=state)
+            self.diff_export_all_btn.configure(state=state)
+
+    def _toggle_diff_item(self, item_id: str):
+        entry = self._diff_entries_by_iid.get(item_id)
+        if entry is None:
+            return
+        key = entry.relative_path.casefold()
+        if key in self._selected_diff_paths:
+            self._selected_diff_paths.remove(key)
+            selected_mark = "☐"
+        else:
+            self._selected_diff_paths.add(key)
+            selected_mark = "☑"
+        values = list(self.diff_tree.item(item_id, "values"))
+        values[0] = selected_mark
+        self.diff_tree.item(item_id, values=values)
+        self._update_diff_summary()
+
+    def _on_diff_tree_click(self, event):
+        item_id = self.diff_tree.identify_row(event.y)
+        column = self.diff_tree.identify_column(event.x)
+        if item_id and column == "#1":
+            self._toggle_diff_item(item_id)
+
+    def _on_diff_tree_space(self, _event):
+        for item_id in self.diff_tree.selection():
+            self._toggle_diff_item(item_id)
+        return "break"
+
+    def _set_all_diff_selected(self, selected: bool):
+        if not self.compare_result:
+            return
+        self._selected_diff_paths = (
+            {entry.relative_path.casefold() for entry in self.compare_result.entries}
+            if selected
+            else set()
+        )
+        mark = "☑" if selected else "☐"
+        for item_id in self.diff_tree.get_children():
+            values = list(self.diff_tree.item(item_id, "values"))
+            values[0] = mark
+            self.diff_tree.item(item_id, values=values)
+        self._update_diff_summary()
+
+    def export_asset_diff(self, export_all: bool):
+        if self._compare_busy or not self.compare_result:
+            return
+        selected_paths = None
+        if not export_all:
+            selected_paths = [
+                entry.relative_path
+                for entry in self.compare_result.entries
+                if entry.relative_path.casefold() in self._selected_diff_paths
+            ]
+            if not selected_paths:
+                self._show_warning("未选择差异", "请勾选要导出的差异文件，或点击“全部导出”。")
+                return
+
+        parent_folder = filedialog.askdirectory(title="选择差异包保存位置")
+        if not parent_folder:
+            return
+        package_name = time.strftime("UEAssetDiff_%Y%m%d_%H%M%S")
+        package_path = Path(parent_folder) / package_name
+        suffix = 1
+        while package_path.exists():
+            package_path = Path(parent_folder) / f"{package_name}_{suffix}"
+            suffix += 1
+
+        self.compare_summary_var.set("正在导出差异包…")
+        self._set_status("正在导出差异包")
+        self._set_compare_busy(True)
+        result = self.compare_result
+
+        def worker():
+            try:
+                exported_path = export_difference_package(
+                    result,
+                    package_path,
+                    selected_paths=selected_paths,
+                )
+                self.root.after(0, lambda: self._finish_diff_export(exported_path, None))
+            except Exception as exc:
+                self.root.after(0, lambda error=exc: self._finish_diff_export(None, error))
+
+        threading.Thread(target=worker, name="asset-diff-export", daemon=True).start()
+
+    def _finish_diff_export(self, exported_path: Optional[Path], error: Optional[Exception]):
+        self._set_compare_busy(False)
+        self._update_diff_summary()
+        if error is not None:
+            error_text = " ".join(str(error).split())
+            if len(error_text) > 140:
+                error_text = error_text[:137] + "..."
+            self.compare_summary_var.set(f"导出失败：{error_text}")
+            self.compare_summary_label.configure(fg=self.colors["error"])
+            self._set_status(f"差异包导出失败：{error_text}", "error")
+            return
+        self.compare_summary_var.set(f"导出完成：{exported_path}")
+        self.compare_summary_label.configure(fg=self.colors["success"])
+        self._set_status("差异包导出完成", "success")
 
     def _collect_asset_files(self, folder_path: str, include_sidecars: bool = False) -> List[str]:
         exts = {".uasset", ".umap"}

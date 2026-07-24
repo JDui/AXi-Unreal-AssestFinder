@@ -20,3 +20,6 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# Rust build output
+rust_diff_probe/target/

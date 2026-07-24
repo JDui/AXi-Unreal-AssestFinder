@@ -1,114 +1,82 @@
-# Development
-
-本文件记录 AXi Unreal Asset Finder 的开发、测试、构建和发布流程。
+# 开发说明
 
 ## 环境
 
-- Python 3.12 推荐，3.10+ 理论可运行。
-- Windows 10/11 推荐，用于拖拽和 PyInstaller 打包验证。
-- 主要依赖：`tkinterdnd2`、`pywin32`、`pyinstaller`。
-
-初始化：
+- Python 3.10+
+- Windows 10/11（拖放与打包验证）
+- Rust stable（仅用于可选性能原型）
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt pyinstaller
+python -m pip install -r requirements.txt
 ```
 
-## 运行
+## 模块
 
-GUI：
-
-```powershell
-python main.py
+```text
+main.py                         GUI / CLI 入口
+gui_dnd.py                      当前 GUI、拖放、分析、修复、比对、导出
+asset_diff.py                   目录扫描、字节比对、差异包导出
+ue_parser.py                    UE 资产头、版本、引用与路径解析
+asset_finder.py                 文件系统路径到 UE Content 路径的转换
+config.py                       版本与 UI 默认值
+test_parser.py                  解析器冒烟测试
+test_asset_diff.py              差异功能单元测试
+rust_diff_probe/                可选 Rust 性能原型
+benchmarks/benchmark_diff.py    Python / Rust 对比基准
 ```
 
-CLI：
+只维护 `gui_dnd.py` 这一套 GUI。Windows 原生拖放回退已内置其中，不依赖
+额外的 `win_dnd` 模块。
 
-```powershell
-python main.py -cli
-python main.py "D:\Project\Content\Asset.uasset"
-```
+## 核心流程
+
+资产分析：
+
+1. `UEAssetParser` 校验包头并提取版本、类型、关联文件。
+2. `UEPathExtractor` 扫描可见路径与引用字符串。
+3. GUI 将结果按目录层级展示。
+
+目录修复：
+
+1. 扫描资产并确认统一的旧 `/Game/.../` 前缀。
+2. 默认复制目录；原位模式需明确确认。
+3. 仅替换已识别前缀，并处理不等长字符串。
+
+更新比对：
+
+1. 按相对路径扫描 Old / New 支持文件。
+2. 同路径文件先比较大小，再分块比较完整字节。
+3. 导出新增、修改文件；删除项写入 `diff_manifest.json`。
 
 ## 测试
 
-基础解析测试：
-
 ```powershell
+python -m unittest -v test_asset_diff.py
 python test_parser.py
+python -m compileall -q main.py gui_dnd.py asset_diff.py ue_parser.py asset_finder.py config.py
+cargo test --manifest-path rust_diff_probe\Cargo.toml
 ```
 
-语法检查：
-
-```powershell
-python -m compileall main.py gui_dnd.py ue_parser.py asset_finder.py config.py
-```
-
-构建前至少验证：
-
-- GUI 可启动。
-- 拖拽区可接收文件。
-- `test_asset.uasset` 可被解析。
-- 目录修复按钮默认禁用，校验通过后才启用。
-- 目录修复模式药丸滑块可在副本粘贴和原位更改之间切换。
-- 目录修复拖入文件夹和检测路径时会显示代码流扫过动画。
-- 检测结果双击异常行可定位到实际文件。
-- 分析结果选中文本使用亮绿底和深色字反转显示。
-- 引用文件按目录层级输出脑图风格结构。
-- 新旧目录名长度不一致时会弹出二次确认。
-- 切换到“原位更改模式”时会提示不可逆风险。
-- 执行目录变更前会提示目录外引用丢失风险。
-
-## UI 约束
-
-当前 UI 位于 `gui_dnd.py`。
-
-- 不在 UI 美化中改动解析、重命名、复制、拖拽处理等业务函数。
-- 视觉状态可以变更颜色、字体、边框、动画，不改变控件命令绑定。
-- 动画使用 `root.after`，不要阻塞 Tk 主线程。
-- 长耗时逻辑仍需保持进度条和状态栏反馈。
+GUI 变更还需手工验证：启动、拖入文件和目录、目录修复安全确认、差异筛选、
+导出清单及文件定位。
 
 ## 构建
-
-使用 PyInstaller：
 
 ```powershell
 pyinstaller --clean --noconfirm build_exe.spec
 ```
 
-输出目录：
+输出：`dist\UEAssetPathFinder\UEAssetPathFinder.exe`
 
-```text
-dist\UEAssetPathFinder\
-```
-
-发行压缩包建议命名：
-
-```text
-release\UEAssetPathFinder-v1.2.1-win64.zip
-```
+`build/`、`dist/`、`release/`、`__pycache__/` 和
+`rust_diff_probe/target/` 都是可重建产物，不入库。
 
 ## 发布
 
-1. 更新 `README.md`、`DEVELOPMENT.md`、`RELEASE_NOTES.md`。
-2. 运行测试和语法检查。
+1. 更新 `config.py`、`README.md`、`RELEASE_NOTES.md`。
+2. 执行全部自动测试和 GUI 冒烟测试。
 3. 重新构建 `dist\UEAssetPathFinder`。
-4. 压缩 `dist\UEAssetPathFinder` 到 `release\UEAssetPathFinder-vX.Y.Z-win64.zip`。
-5. 提交源码变更。
-6. 推送 `main`。
-7. 创建 Git tag，例如 `v1.2.1`。
-8. 在 GitHub Release 上传压缩包。
-
-## Git
-
-生成物不入库：
-
-- `.venv/`
-- `__pycache__/`
-- `build/`
-- `dist/`
-- `release/`
-
-Release 附件由 GitHub Release 保存。
+4. 压缩为 `UEAssetPathFinder-vX.Y.Z-win64.zip`。
+5. 创建 Git tag，并将压缩包上传至 GitHub Release。
