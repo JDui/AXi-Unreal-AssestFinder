@@ -4,7 +4,7 @@
 `.uasset` / `.umap` / `.uexp` / `.ubulk` 文件，提取 UE 内路径、版本信息、
 关联文件和导入引用，提供目录重命名修复辅助，并比较新旧资产目录。
 
-当前版本：`v2.0.0`
+当前版本：`v2.0.1`
 
 ## 功能
 
@@ -23,7 +23,7 @@
 
 ### 使用发行版
 
-1. 下载 GitHub Release 中的 `UEAssetPathFinder-v2.0.0-win64.zip`。
+1. 下载 GitHub Release 中的 `UEAssetPathFinder-v2.0.1-win64.zip`。
 2. 解压后运行 `UEAssetPathFinder.exe`。
 3. 拖入 UE 资产文件或资产文件夹。
 

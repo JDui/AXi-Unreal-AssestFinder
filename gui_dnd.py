@@ -619,11 +619,23 @@ class UEAssetFinderGUI:
             dialog.bind("<Return>", lambda _event: finish(True))
 
         dialog.update_idletasks()
-        width = max(dialog.winfo_width(), 560)
-        height = dialog.winfo_height()
+        # Use requested size: winfo_width/height return 1 for a not-yet-mapped
+        # window, which would produce an invisible 1px-high modal that grabs all
+        # input and can only be dismissed with ESC. reqwidth/reqheight come from
+        # the geometry manager and are reliable before the window is mapped.
+        width = max(dialog.winfo_reqwidth(), 560)
+        height = max(dialog.winfo_reqheight(), 120)
         x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
         dialog.geometry(f"{width}x{height}+{max(x, 0)}+{max(y, 0)}")
+        # update_idletasks applies the position; then lift so the dialog is
+        # raised above the overrideredirect main window. Without this, Windows
+        # can leave the modal below the main window in the z-order, so it holds
+        # the grab while being invisible (UI frozen until ESC). focus_force
+        # guarantees keyboard focus reaches the overrideredirect window.
+        dialog.update_idletasks()
+        dialog.lift()
+        dialog.focus_force()
         dialog.grab_set()
         ok_btn.focus_set()
         self.root.wait_window(dialog)
