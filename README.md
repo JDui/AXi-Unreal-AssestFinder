@@ -4,7 +4,7 @@
 `.uasset` / `.umap` / `.uexp` / `.ubulk` 文件，提取 UE 内路径、版本信息、
 关联文件和导入引用，提供目录重命名修复辅助，并比较新旧资产目录。
 
-当前版本：`v2.0.1`
+当前版本：`v2.1.1`
 
 ## 功能
 
@@ -15,6 +15,7 @@
 - 目录修复：校验目录内资产路径，支持不同长度目录名变更、二次确认和安全副本模式。
 - CLI 模式：可从命令行快速转换单文件或目录路径。
 - 资产更新比对：按相对路径和完整文件内容比较 Old / New 文件夹。
+- 资产降级：批量改写 UE5 资产副本的版本字段，目标可选 UE 5.5、5.3 或 5.1。
 - 差异筛选：显示新增、修改、删除，支持逐项勾选和批量选择。
 - 差异包导出：保持 New 目录结构，删除路径写入 `diff_manifest.json`。
 - Windows 打包：通过 PyInstaller 生成免安装发行包。
@@ -23,7 +24,7 @@
 
 ### 使用发行版
 
-1. 下载 GitHub Release 中的 `UEAssetPathFinder-v2.0.1-win64.zip`。
+1. 获取 Windows 发行包 `UEAssetPathFinder-v2.1.1-win64.zip`。
 2. 解压后运行 `UEAssetPathFinder.exe`。
 3. 拖入 UE 资产文件或资产文件夹。
 
@@ -47,7 +48,7 @@ python main.py "D:\Project\Content\Characters"
 运行测试：
 
 ```powershell
-python -m unittest -v test_asset_diff.py
+python -m unittest -v
 python test_parser.py
 ```
 
@@ -70,6 +71,15 @@ UEAssetDiff_YYYYMMDD_HHMMSS/
 当一侧为独立目录时，它继承另一侧所选目录对应的 `/Game` 前缀。例如 Old 位于 `Content/Characters/YanHe/YH_001_10TH`，New 可直接选择下载的 `YH_001_10TH`。Content 外部的 `.uasset` 等文件不参与项目根扫描。若双方都无法建立 Content 映射，程序会报错但不会阻塞界面。导出不会生成重复的 `Content/Content`。删除文件不会从 Old 复制到包中；使用 `deleted_paths` 或 `deleted_game_paths` 驱动下游删除操作。
 
 比对不读取文件修改时间。大小不同标记为“修改·大小”；大小相同则逐块读取完整字节，内容不同标记为“修改·内容”。UE 包头 GUID 等元数据属于文件内容，因此变化时也会被精确模式识别。
+
+## 资产降级
+
+1. 打开“资产更新比对”旁边的“资产降级”标签页。
+2. 拖入或选择未烘焙的 UE5 `.uasset` / `.umap` 文件，或者拖入或选择包含资产的文件夹。
+3. 选择目标版本。默认 UE 5.5，也可选择 UE 5.3 或 UE 5.1。
+4. 点击“导出降级副本”，选好输出位置后查看逐个资产的处理结果。程序保留包名并复制同包伴随文件。选择文件夹时会递归扫描，并保留所选文件夹名和内部目录结构。
+
+程序会下调包版本、保存与兼容引擎版本、已知的自定义版本，并调整相应的包头、导出表和已识别的属性标签。遇到未适配的属性标签时，结果栏会标记该情况。强制降级可能丢失部分新版本特性。新版专有资产数据、插件和外部引用仍需目标编辑器支持，改写后的文件可能加载失败或触发编辑器崩溃。请把副本放在目标项目中与原包对应的 Content 相对路径后测试。
 
 ## 界面
 
@@ -108,6 +118,7 @@ UEAssetDiff_YYYYMMDD_HHMMSS/
 main.py                         程序入口，选择 GUI / CLI / 快速转换
 gui_dnd.py                      当前 GUI、拖拽、分析、修复、比对与导出
 asset_diff.py                   资产文件夹精确比对与差异包导出
+asset_downgrade.py              UE5 版本字段与包结构改写
 ue_parser.py                    UE 资产解析和路径提取
 asset_finder.py                 文件路径到 UE Content 路径的转换逻辑
 config.py                       默认配置和版本号

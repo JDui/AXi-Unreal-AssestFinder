@@ -1,6 +1,8 @@
+import tkinter as tk
 import unittest
 
-from gui_dnd import _taskbar_extended_style, _window_drag_offset
+from asset_downgrade import DEFAULT_TARGET, TARGET_VERSIONS
+from gui_dnd import UEAssetFinderGUI, _taskbar_extended_style, _window_drag_offset
 
 
 class TaskbarWindowStyleTests(unittest.TestCase):
@@ -25,6 +27,23 @@ class TaskbarWindowStyleTests(unittest.TestCase):
 
         self.assertEqual(offset, (140, 80))
         self.assertEqual((541 - offset[0], 331 - offset[1]), (401, 251))
+
+
+class DowngradeVersionPickerTests(unittest.TestCase):
+    def test_popdown_loads_versions_with_the_configured_font(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk display unavailable: {exc}")
+        self.addCleanup(root.destroy)
+        root.withdraw()
+        app = UEAssetFinderGUI(root)
+
+        combo = str(app.downgrade_combo)
+        root.tk.call("ttk::combobox::ConfigureListbox", combo)
+        popdown = root.tk.call("ttk::combobox::PopdownWindow", combo)
+        self.assertEqual(root.tk.call(f"{popdown}.f.l", "get", 0, "end"), TARGET_VERSIONS)
+        self.assertEqual(app.downgrade_target.get(), DEFAULT_TARGET)
 
 
 if __name__ == "__main__":

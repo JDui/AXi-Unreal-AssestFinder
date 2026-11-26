@@ -23,6 +23,8 @@ from typing import Any, Dict, Optional, List
 
 from asset_finder import UEAssetFinder
 from asset_diff import ComparisonResult, compare_asset_folders, export_difference_package
+from asset_downgrade import DEFAULT_TARGET, PACKAGE_EXTENSIONS, TARGET_VERSIONS, downgrade_assets
+from config import APP_VERSION
 from ue_parser import UEAssetParser, UEPathExtractor
 
 
@@ -115,7 +117,7 @@ class UEAssetFinderGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("AXi UE Asset Finder 2.0")
+        self.root.title(f"AXi UE Asset Finder {APP_VERSION}")
         self.root.geometry("1000x820")
         self.root.minsize(900, 760)
         self.root.resizable(True, True)
@@ -139,6 +141,9 @@ class UEAssetFinderGUI:
         self._drop_hover = False
         self._folder_drop_hover = False
         self._compare_busy = False
+        self._downgrade_busy = False
+        self._downgrade_sources = ()
+        self._downgrade_output = None
         self.compare_result: Optional[ComparisonResult] = None
         self._diff_entries_by_iid = {}
         self._selected_diff_paths = set()
@@ -163,6 +168,7 @@ class UEAssetFinderGUI:
         # 设置样式并创建界面
         self.setup_styles()
         self.create_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._close_window)
         self.center_window()
         self._start_drop_pulse()
         self.root.after_idle(self._apply_windows_taskbar_style)
@@ -197,7 +203,6 @@ class UEAssetFinderGUI:
         self.root.option_add("*TCombobox*Listbox.foreground", self.colors["text"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", self.colors["selection_bg"])
         self.root.option_add("*TCombobox*Listbox.selectForeground", self.colors["selection_fg"])
-        self.root.option_add("*TCombobox*Listbox.font", "Cascadia Code 10")
 
         available = set(tkfont.families(self.root))
 
@@ -217,6 +222,7 @@ class UEAssetFinderGUI:
             "button": pick_font(["Cascadia Code SemiBold", "Cascadia Code", "Consolas", "Microsoft YaHei"], 10, "bold"),
             "status": pick_font(["Cascadia Code", "Consolas", "Microsoft YaHei"], 9),
         }
+        self.root.option_add("*TCombobox*Listbox.font", self.fonts["mono"])
 
     def _apply_window_icon(self):
         try:
@@ -550,6 +556,9 @@ class UEAssetFinderGUI:
         self.root.geometry(f"{width}x{height}")
 
     def _close_window(self):
+        if self._downgrade_busy:
+            self._set_status("降级副本正在写入，请等待导出完成。", "warning")
+            return
         self.root.destroy()
 
     def _matrix_dialog(self, title: str, message: str, kind: str = "info", confirm: bool = False) -> bool:
@@ -702,7 +711,7 @@ class UEAssetFinderGUI:
 
         title_label = tk.Label(
             title_bar,
-            text="AXi UE Asset Finder 2.0  //  MATRIX PACKAGE TOOL",
+            text=f"AXi UE Asset Finder {APP_VERSION}  //  MATRIX PACKAGE TOOL",
             bg=self.colors["terminal"],
             fg=self.colors["accent_soft"],
             font=self.fonts["status"],
@@ -745,8 +754,8 @@ class UEAssetFinderGUI:
             icon_label = tk.Label(header, image=self.header_icon, bg=self.colors["panel_high"])
             icon_label.grid(row=0, column=0, rowspan=2, padx=(0, 12))
 
-        ttk.Label(header, text="UE 资产分析工具 2.0 // AXi PATHFINDER", style="Title.TLabel").grid(row=0, column=1, sticky="w")
-        ttk.Label(header, text="MATRIX ROUTE SCANNER / 分析、修复、更新比对与差异包导出", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(header, text=f"UE 资产分析工具 {APP_VERSION} // AXi PATHFINDER", style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header, text="MATRIX ROUTE SCANNER / 分析、修复、更新比对与版本降级", style="Subtitle.TLabel").grid(row=1, column=1, sticky="w", pady=(2, 0))
 
         self.matrix_strip = tk.Canvas(
             main_frame,
@@ -761,11 +770,12 @@ class UEAssetFinderGUI:
 
         self.tab_bar = tk.Frame(main_frame, bg=self.colors["bg"])
         self.tab_bar.grid(row=2, column=0, sticky="ew", pady=(0, 6))
-        self.tab_bar.columnconfigure(3, weight=1)
+        self.tab_bar.columnconfigure(4, weight=1)
 
         self._create_tab_button("analyze", "ASSET ANALYZE", "资产分析", 0)
         self._create_tab_button("relocate", "PATH REPAIR", "目录修复", 1)
         self._create_tab_button("compare", "ASSET DIFF", "资产更新比对", 2)
+        self._create_tab_button("downgrade", "UE DOWNGRADE", "资产降级", 3)
 
         self.content_frame = tk.Frame(
             main_frame,
@@ -780,7 +790,14 @@ class UEAssetFinderGUI:
         self.tab_analyze = tk.Frame(self.content_frame, bg=self.colors["bg"])
         self.tab_relocate = tk.Frame(self.content_frame, bg=self.colors["bg"])
         self.tab_compare = tk.Frame(self.content_frame, bg=self.colors["bg"])
-        for tab in (self.tab_analyze, self.tab_relocate, self.tab_compare):
+        self.tab_downgrade = tk.Frame(self.content_frame, bg=self.colors["bg"])
+        self._tabs = {
+            "analyze": self.tab_analyze,
+            "relocate": self.tab_relocate,
+            "compare": self.tab_compare,
+            "downgrade": self.tab_downgrade,
+        }
+        for tab in self._tabs.values():
             tab.grid(row=0, column=0, sticky="nsew")
 
         self.analysis_flow = tk.Canvas(
@@ -796,6 +813,7 @@ class UEAssetFinderGUI:
         self._build_analyze_tab(self.tab_analyze)
         self._build_relocate_tab(self.tab_relocate)
         self._build_compare_tab(self.tab_compare)
+        self._build_downgrade_tab(self.tab_downgrade)
         self._select_tab("analyze")
 
         self.status_var = tk.StringVar(value="就绪")
@@ -874,12 +892,7 @@ class UEAssetFinderGUI:
 
     def _select_tab(self, key: str):
         self._active_tab = key
-        if key == "analyze":
-            self.tab_analyze.tkraise()
-        elif key == "relocate":
-            self.tab_relocate.tkraise()
-        else:
-            self.tab_compare.tkraise()
+        self._tabs[key].tkraise()
         for tab_key in self._tab_buttons:
             self._draw_tab_button(tab_key)
 
@@ -1439,6 +1452,81 @@ class UEAssetFinderGUI:
         self.diff_export_all_btn.pack(side=tk.RIGHT, padx=(0, 8))
         self._set_diff_export_enabled(False)
 
+    def _build_downgrade_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+        section, controls = self._create_section(parent, "强制改写 UE 资产版本")
+        section.grid(row=0, column=0, sticky="ew", padx=2, pady=(2, 8))
+        controls.columnconfigure(0, weight=1)
+        drop = tk.Label(
+            controls, text="拖入 .uasset / .umap 文件或资产文件夹", anchor="w", padx=12, pady=12,
+            bg=self.colors["terminal"], fg=self.colors["accent_soft"], font=self.fonts["body_bold"],
+        )
+        drop.grid(row=0, column=0, sticky="ew", padx=(10, 8), pady=10)
+        if HAS_DND:
+            try:
+                drop.drop_target_register(DND_FILES)
+                drop.dnd_bind("<<Drop>>", self._on_downgrade_drop)
+            except tk.TclError:
+                pass
+        self.downgrade_browse = self._make_action_button(controls, "选择文件", self._browse_downgrade_assets)
+        self.downgrade_browse.grid(row=0, column=1, padx=(0, 8), pady=10)
+        self.downgrade_folder = self._make_action_button(controls, "选择文件夹", self._browse_downgrade_folder)
+        self.downgrade_folder.grid(row=0, column=2, padx=(0, 10), pady=10)
+
+        options = tk.Frame(controls, bg=self.colors["panel"])
+        options.grid(row=1, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 8))
+        tk.Label(
+            options, text="目标版本", bg=self.colors["panel"], fg=self.colors["text"], font=self.fonts["body"],
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        self.downgrade_target = tk.StringVar(value=DEFAULT_TARGET)
+        self.downgrade_combo = ttk.Combobox(
+            options, textvariable=self.downgrade_target, values=TARGET_VERSIONS, state="readonly", width=10,
+        )
+        self.downgrade_combo.pack(side=tk.LEFT)
+        self.downgrade_start = self._make_action_button(
+            options, "导出降级副本", self._start_downgrade, primary=True, width=14,
+        )
+        self.downgrade_start.pack(side=tk.RIGHT)
+        self.downgrade_start.configure(state=tk.DISABLED)
+        tk.Label(
+            controls, text="强制降级可能丢失部分新版本特性，也可能导致资产在目标 UE 中加载失败。",
+            bg=self.colors["panel"], fg=self.colors["warning"], font=self.fonts["status"], anchor="w",
+        ).grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
+
+        section, table = self._create_section(parent, "资产与处理结果", icon_kind="result")
+        section.grid(row=1, column=0, sticky="nsew", padx=2, pady=(0, 8))
+        table.columnconfigure(0, weight=1)
+        table.rowconfigure(0, weight=1)
+        self.downgrade_tree = ttk.Treeview(
+            table, columns=("file", "version", "state", "detail"), show="headings", selectmode="browse",
+        )
+        for key, title, width, stretch in (
+            ("file", "资产文件", 215, True), ("version", "源版本", 90, False),
+            ("state", "状态", 110, False), ("detail", "处理说明", 345, True),
+        ):
+            self.downgrade_tree.heading(key, text=title)
+            self.downgrade_tree.column(key, width=width, minwidth=60, stretch=stretch)
+        self.downgrade_tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        for tag in ("success", "warning", "error"):
+            self.downgrade_tree.tag_configure(tag, foreground=self.colors[tag])
+        scrollbar = ttk.Scrollbar(
+            table, orient="vertical", command=self.downgrade_tree.yview, style="Matrix.Vertical.TScrollbar",
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 10), pady=10)
+        self.downgrade_tree.configure(yscrollcommand=scrollbar.set)
+
+        footer = tk.Frame(parent, bg=self.colors["bg"])
+        footer.grid(row=2, column=0, sticky="ew", padx=2, pady=(0, 4))
+        self.downgrade_status = tk.StringVar(value="等待选择资产")
+        tk.Label(
+            footer, textvariable=self.downgrade_status, bg=self.colors["bg"],
+            fg=self.colors["text_muted"], font=self.fonts["status"],
+        ).pack(side=tk.LEFT)
+        self.downgrade_reveal = self._make_action_button(footer, "定位输出", self._reveal_downgrade_output)
+        self.downgrade_reveal.pack(side=tk.RIGHT)
+        self.downgrade_reveal.configure(state=tk.DISABLED)
+
     def _create_compare_drop_zone(self, parent, kind: str, title: str, variable: tk.StringVar, column: int):
         zone = tk.Frame(
             parent,
@@ -1946,6 +2034,9 @@ class UEAssetFinderGUI:
     def _handle_drop_files(self, files: List[str]):
         if not files:
             return
+        if self._active_tab == "downgrade":
+            self._set_downgrade_sources(files)
+            return
         path = files[0]
         if os.path.isdir(path):
             if self._active_tab == "compare":
@@ -2100,6 +2191,104 @@ class UEAssetFinderGUI:
                 return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
             value /= 1024.0
         return f"{size} B"
+
+    def _browse_downgrade_assets(self):
+        paths = filedialog.askopenfilenames(
+            parent=self.root, title="选择要降级的资产",
+            filetypes=[("Unreal 资产包", "*.uasset *.umap")],
+        )
+        if paths:
+            self._set_downgrade_sources(paths)
+
+    def _browse_downgrade_folder(self):
+        path = filedialog.askdirectory(parent=self.root, title="选择要降级的资产文件夹", mustexist=True)
+        if path:
+            self._set_downgrade_sources((path,))
+
+    def _on_downgrade_drop(self, event):
+        self._set_downgrade_sources(self.root.tk.splitlist(event.data))
+        return "copy"
+
+    def _set_downgrade_sources(self, paths):
+        if self._downgrade_busy:
+            return
+        selected = {}
+        for value in paths:
+            path = Path(value)
+            is_folder = path.is_dir()
+            if is_folder or path.suffix.lower() in PACKAGE_EXTENSIONS:
+                selected[path] = is_folder
+        self._downgrade_sources = tuple(selected)
+        self._downgrade_output = None
+        self.downgrade_reveal.configure(state=tk.DISABLED)
+        self.downgrade_tree.delete(*self.downgrade_tree.get_children())
+        for path, is_folder in selected.items():
+            state = "待扫描" if is_folder else "待处理"
+            self.downgrade_tree.insert("", tk.END, values=(path.name, "—", state, str(path)))
+        count = len(selected)
+        folders = sum(selected.values())
+        if count:
+            self.downgrade_status.set(f"已选 {count - folders} 个资产文件，{folders} 个文件夹")
+        else:
+            self.downgrade_status.set("请选择资产文件或文件夹")
+        self.downgrade_start.configure(state=tk.NORMAL if count else tk.DISABLED)
+
+    def _start_downgrade(self):
+        if self._downgrade_busy or not self._downgrade_sources:
+            return
+        target = self.downgrade_target.get()
+        sources = self._downgrade_sources
+        destination = filedialog.askdirectory(parent=self.root, title="选择降级副本的输出位置", mustexist=True)
+        if not destination:
+            return
+        self._downgrade_busy = True
+        for button in (
+            self.downgrade_browse, self.downgrade_folder, self.downgrade_start,
+            self.downgrade_reveal, self.downgrade_combo,
+        ):
+            button.configure(state=tk.DISABLED)
+        self.downgrade_status.set(f"正在输出 {target} 副本…")
+
+        def worker():
+            try:
+                results = downgrade_assets(sources, destination, target)
+                self.root.after(0, lambda: self._finish_downgrade(results))
+            except Exception as exc:
+                self.root.after(0, lambda error=str(exc): self._finish_downgrade([], error))
+
+        threading.Thread(target=worker, name="asset-downgrade", daemon=True).start()
+
+    def _finish_downgrade(self, results, error=None):
+        self._downgrade_busy = False
+        self.downgrade_browse.configure(state=tk.NORMAL)
+        self.downgrade_folder.configure(state=tk.NORMAL)
+        self.downgrade_start.configure(state=tk.NORMAL)
+        self.downgrade_combo.configure(state="readonly")
+        self._downgrade_output = next((result.output_root for result in results if result.output), None)
+        self.downgrade_reveal.configure(state=tk.NORMAL if self._downgrade_output else tk.DISABLED)
+        if error is not None:
+            self.downgrade_status.set("导出失败")
+            self._set_status(error, "error")
+            return
+        self.downgrade_tree.delete(*self.downgrade_tree.get_children())
+        for result in results:
+            tag = "success" if result.output else "error"
+            if result.status == "属性未完全适配":
+                tag = "warning"
+            self.downgrade_tree.insert(
+                "", tk.END, values=(str(result.relative_path), result.source_version, result.status, result.detail),
+                tags=(tag,),
+            )
+        written = sum(result.output is not None for result in results)
+        self.downgrade_status.set(f"已输出 {written} 个副本，失败 {len(results) - written} 个")
+        if self._downgrade_output:
+            self._set_status(f"副本目录  {self._downgrade_output}", "success")
+        else:
+            self._set_status("未生成副本，详见处理结果。", "error")
+
+    def _reveal_downgrade_output(self):
+        if self._downgrade_output:
+            self._reveal_in_explorer(str(self._downgrade_output))
 
     def _set_compare_busy(self, busy: bool):
         self._compare_busy = busy
